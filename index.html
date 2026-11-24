@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Trip To Venda | Door to door lifts Venda ⇄ Gauteng and beyond</title>
+  <meta name="description" content="Book a seat with a verified driver travelling between Venda, Gauteng and every province. Picked up at your door, dropped at theirs.">
+  <meta name="theme-color" content="#0a3d27">
+  <link rel="manifest" href="manifest.json">
+  <link rel="icon" href="favicon-32.png" sizes="32x32" type="image/png">
+  <link rel="icon" href="favicon-64.png" sizes="64x64" type="image/png">
+  <link rel="apple-touch-icon" href="apple-touch-icon.png">
+  <link rel="preload" as="image" href="img/hero.jpg">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="Trip To Venda">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="lib/leaflet/leaflet.css">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div id="splash" class="splash" role="status" aria-label="Loading Trip To Venda">
+    <div class="splash-in">
+      <div class="splash-pin"><span class="ring"></span><img src="img/emblem.webp" alt="" width="132" height="132"></div>
+      <div class="splash-word">Trip To <b>Venda</b></div>
+      <p class="splash-tag">Door to door lifts across South Africa</p>
+      <div class="splash-bar"><i></i></div>
+      <small id="splashMsg">Finding verified drivers…</small>
+    </div>
+    <div class="splash-foot">Venda · Gauteng · every province</div>
+  </div>
+  <header class="topbar" id="topbar">
+    <div class="topbar-in">
+      <a href="#/" class="brand" aria-label="Trip To Venda home">
+        <img src="img/emblem.webp" alt="" width="38" height="38" class="brand-mark">
+        <span>Trip To <b>Venda</b></span>
+      </a>
+      <nav id="nav" class="nav"></nav>
+      <div class="top-actions" id="topActions"></div>
+    </div>
+  </header>
+
+  <main id="app"></main>
+
+  <footer class="footer">
+    <div class="wrap footer-grid">
+      <div>
+        <a href="#/" class="brand-logo" aria-label="Trip To Venda home"><img src="img/logo-light.svg" alt="Trip To Venda, door to door lifts across South Africa" width="300" height="60"></a>
+        <p class="f-muted">Door to door lifts between Venda, Gauteng and the rest of South Africa. Verified riders. Verified drivers. Fair prices set by drivers.</p>
+      </div>
+      <div><h4>Travel</h4><a href="#/search">Find a trip</a><a href="#/search?fp=Gauteng&tp=Venda%20(Limpopo)">Trips to Venda</a><a href="#/signup?role=driver">Drive with us</a></div>
+      <div><h4>Company</h4><a href="#/how">How it works</a><a href="#/safety">Safety centre</a><a href="#/safety">Help & FAQ</a><a href="#/safety">Community rules</a></div>
+      <div><h4>Emergency</h4><a href="tel:10111">SAPS · 10111</a><a href="tel:112">Any cellphone · 112</a><a href="tel:10177">Ambulance · 10177</a></div>
+    </div>
+    <div class="wrap f-bottom"><span>© <span id="yr"></span> Trip To Venda</span><span>Made in Thohoyandou 🇿🇦</span></div>
+  </footer>
+
+  <nav id="tabbar" class="tabbar"></nav>
+  <button id="sosBtn" class="sos hidden" aria-label="SOS emergency">SOS</button>
+  <div id="modal" class="modal hidden" role="dialog" aria-modal="true"><div class="sheet" id="sheet"></div></div>
+  <div id="toast" class="toast" role="status"></div>
+
+  <script src="lib/leaflet/leaflet.js"></script>
+  <script src="lib/basemap.js"></script>
+  <script src="lib/routes.js"></script>
+  <script src="lib/firebase.js"></script>
+  <script src="firebase-config.js"></script>
+  <script src="cloud.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

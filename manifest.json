@@ -1,0 +1,29 @@
+{
+  "name": "Trip To Venda",
+  "short_name": "TripToVenda",
+  "description": "Door to door lifts between Venda, Gauteng and every province, verified riders and drivers.",
+  "start_url": "./index.html#/",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#0a3d27",
+  "theme_color": "#0a3d27",
+  "icons": [
+    {
+      "src": "icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png"
+    },
+    {
+      "src": "icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png"
+    },
+    {
+      "src": "icon-maskable-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ]
+}
