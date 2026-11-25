@@ -646,3 +646,89 @@ a.kpi.dark:hover{filter:brightness(1.1)}
 
 
 @media(max-width:480px){.topbar.signed .brand span{display:none}.role-chip{max-width:170px}}
+
+/* ---- email link page (verify / reset) ---- */
+.aa-card{max-width:440px;margin:24px auto 40px;text-align:center}
+.aa-head{display:flex;align-items:center;justify-content:center;gap:10px;padding-bottom:18px;margin-bottom:22px;border-bottom:1px solid var(--line)}
+.aa-head img{width:46px;height:46px;border-radius:50%;border:2px solid var(--accent)}
+.aa-head div{font-weight:800;font-size:1.15rem;text-align:left;line-height:1.1}.aa-head b{color:var(--accent-600)}
+.aa-head small{display:block;font-size:.66rem;font-weight:700;letter-spacing:.12em;text-transform:uppercase;color:var(--muted);margin-top:3px}
+.aa-ic{width:64px;height:64px;border-radius:50%;display:grid;place-items:center;margin:0 auto 14px;background:var(--brand-50);color:var(--brand)}
+.aa-ic .i{width:30px;height:30px}.aa-ic.ok{background:#e3f6ea;color:#13784b}.aa-ic.bad{background:var(--danger-50);color:var(--danger)}
+.aa-card h2{margin:0 0 8px}.aa-card p.muted{margin:0 0 20px;line-height:1.55}
+.aa-card form{text-align:left}
+
+/* ---- photo tiles: take photo or choose from gallery ---- */
+.upload{cursor:default}
+.upload .u-btns{display:flex;gap:8px;justify-content:center;flex-wrap:wrap;margin-top:12px}
+.upload .u-btns .btn{position:relative;overflow:hidden}
+.upload .u-file{position:absolute;inset:0;opacity:0;cursor:pointer;width:100%;height:100%}
+.upload img{cursor:zoom-in;max-width:100%}
+.upload .u-q{margin-top:8px;min-height:1px}
+.upload.busy{opacity:.6;pointer-events:none}
+.upload.busy .u-ic{animation:pulse 1s infinite}
+@keyframes pulse{50%{transform:scale(.9)}}
+.warnc{color:#b45309;display:inline-flex;align-items:center;gap:4px;font-weight:600}
+.okc{display:inline-flex;align-items:center;gap:4px}
+
+/* ---- show / hide password ---- */
+.pw-wrap{position:relative}
+.pw-wrap input{padding-right:52px;width:100%}
+.pw-eye{position:absolute;right:4px;top:50%;transform:translateY(-50%);width:44px;height:44px;border:0;background:transparent;border-radius:10px;display:grid;place-items:center;color:var(--muted);cursor:pointer}
+.pw-eye:hover,.pw-eye:focus-visible{color:var(--brand);background:var(--brand-50);outline:none}
+
+/* ---- in-app camera ---- */
+body.cam-open{overflow:hidden}
+.cam-layer{position:fixed;inset:0;z-index:2000;background:#05090a;color:#fff;display:flex;flex-direction:column}
+.cam-layer.hidden{display:none}
+.cam-top{display:flex;align-items:center;justify-content:space-between;padding:calc(10px + env(safe-area-inset-top)) 16px 10px}
+.cam-top b{font-size:1rem}
+.cam-x{width:44px;height:44px;border-radius:50%;border:0;background:rgba(255,255,255,.12);color:#fff;display:grid;place-items:center;cursor:pointer}
+.cam-view{position:relative;flex:1;min-height:0;overflow:hidden;background:#000}
+.cam-view video,.cam-view canvas{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}
+.cam-view canvas{object-fit:contain;background:#000}
+.cam-view video.mirror{transform:scaleX(-1)}
+.cam-guide{position:absolute;inset:0;display:grid;place-items:center;pointer-events:none}
+.cam-guide span{display:block;box-shadow:0 0 0 9999px rgba(0,0,0,.45);border:3px solid #ffb81c}
+.cam-guide.g-card span{width:min(86%,560px);aspect-ratio:1.586;border-radius:14px}
+.cam-guide.g-face span{width:min(62%,320px);aspect-ratio:.78;border-radius:50%}
+.cam-guide.g-free span{width:92%;height:86%;border-radius:18px;border-style:dashed;border-color:rgba(255,255,255,.55);box-shadow:none}
+.cam-view canvas:not(.hidden)~.cam-guide{display:none}
+.cam-msg{position:absolute;left:16px;right:16px;top:50%;transform:translateY(-50%);text-align:center;font-weight:600;line-height:1.5;text-shadow:0 1px 3px #000}
+.cam-msg:empty{display:none}
+.cam-tip{padding:12px 18px 4px;text-align:center;font-size:.9rem;color:#dfe8e3;min-height:2.6em}
+.cam-tip .okc{color:#8fe3b5}.cam-tip .warnc{color:#ffd36b}
+.cam-bar{display:flex;align-items:center;justify-content:space-evenly;gap:12px;padding:14px 16px calc(18px + env(safe-area-inset-bottom))}
+.cam-bar.hidden{display:none}
+.cam-shut{width:76px;height:76px;border-radius:50%;border:5px solid #fff;background:#ffb81c;cursor:pointer;box-shadow:0 0 0 3px rgba(0,0,0,.4) inset;transition:transform .1s}
+.cam-shut:active{transform:scale(.92)}
+.cam-shut:disabled{opacity:.4}
+.cam-sm{width:52px;height:52px;border-radius:50%;border:0;background:rgba(255,255,255,.14);color:#fff;display:grid;place-items:center;cursor:pointer}
+.cam-sm.on{background:#ffb81c;color:#0c1a13}
+.cam-sm.hidden{visibility:hidden;display:grid}
+#camAfter .btn{flex:1;max-width:220px}
+.btn-ghost-light{background:rgba(255,255,255,.12);color:#fff;border:1px solid rgba(255,255,255,.3)}
+@media(min-width:900px){.cam-layer{inset:4vh 50% auto auto;transform:translateX(50%);width:min(720px,94vw);height:92vh;border-radius:20px;overflow:hidden;box-shadow:0 30px 80px rgba(0,0,0,.5)}}
+@media(min-width:900px){body.cam-open::after{content:"";position:fixed;inset:0;background:rgba(5,9,10,.7);z-index:1999}}
+body.cam-open .tabbar,body.cam-open .toast-wrap{visibility:hidden}
+body.cam-open .toast{z-index:2100}
+.cam-view video{background:#000}
+.cam-view .hidden{display:none!important}
+.cam-msg{z-index:2;background:rgba(10,20,15,.82);border-radius:16px;padding:16px;max-width:420px;margin:0 auto}
+.cam-msg .btns{flex-wrap:wrap}
+
+/* ---- rules & policies ---- */
+.pol{max-width:860px}
+.pol-lead{display:flex;gap:14px;align-items:flex-start;background:var(--brand-50);border:1px solid var(--brand-100);border-radius:16px;padding:16px 18px;margin-bottom:20px}
+.pol-lead .i{flex:none;color:var(--brand);width:26px;height:26px;margin-top:2px}
+.pol-lead p{margin:0;line-height:1.6;color:var(--ink-2)}
+.pol-sec{margin-bottom:22px}
+.pol-sec h3{font-size:1.08rem;margin:0 0 8px}
+.pol-sec p{margin:0;line-height:1.65;color:var(--ink-2)}
+.pol-list{margin:0;padding-left:20px;line-height:1.65;color:var(--ink-2)}
+.pol-list li{margin-bottom:6px}
+.tabbar-wrap{overflow-x:auto;margin-bottom:16px;-webkit-overflow-scrolling:touch}
+.tabbar-wrap .tabs{width:max-content}
+.decl{background:#fafcfb;border:1px solid var(--line);border-radius:16px;padding:16px;margin:8px 0 16px}
+.decl .check{display:flex;gap:10px;align-items:flex-start;margin-bottom:10px;line-height:1.5}
+.decl .check input{margin-top:3px;flex:none}

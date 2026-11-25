@@ -1,0 +1,14 @@
+# Trip To Venda · Netlify settings (no build step, no packages)
+[build]
+  publish = "."
+  command = ""
+
+[functions]
+  directory = "netlify/functions"
+
+# never serve the function source or setup notes as web pages
+[[redirects]]
+  from = "/netlify/*"
+  to = "/404"
+  status = 404
+  force = true

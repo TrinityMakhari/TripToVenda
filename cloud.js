@@ -313,7 +313,7 @@
     }
   };
   Cloud.signup = async (email, pw) => {
-    try { const c = await S.createUserWithEmailAndPassword(auth, email, pw); S.sendEmailVerification(c.user).catch(() => { }); return c.user.uid; }
+    try { const c = await S.createUserWithEmailAndPassword(auth, email, pw); Cloud.sendVerify().catch(() => { }); return c.user.uid; }
     catch (e) {
       // account made but profile never saved (e.g. lost signal): finish it with the same password
       if (e.code === 'auth/email-already-in-use') {
@@ -323,9 +323,27 @@
     }
   };
   Cloud.logout = () => S.signOut(auth);
-  Cloud.reset = email => S.sendPasswordResetEmail(auth, email);
+  /* branded emails (logo + button) through our Netlify function; Firebase's plain email if it isn't set up */
+  const back = { url: location.origin + '/' };
+  async function mailApi(body, token) {
+    try {
+      const r = await fetch('/api/auth-email', { method: 'POST', headers: { 'content-type': 'application/json', ...(token ? { authorization: 'Bearer ' + token } : {}) }, body: JSON.stringify(body) });
+      if (r.ok) return 'sent';
+      if (r.status === 429) { const d = await r.json().catch(() => ({})); throw { code: 'ttv/wait', wait: d.wait || 1 }; }
+      return 'fallback';
+    } catch (e) { if (e.code === 'ttv/wait') throw e; return 'fallback'; }
+  }
+  Cloud.sendVerify = async () => {
+    const u = auth.currentUser; if (!u) return;
+    if (await mailApi({ type: 'verify' }, await u.getIdToken()) === 'fallback') await S.sendEmailVerification(u, back);
+  };
+  Cloud.reset = async email => { if (await mailApi({ type: 'reset', email }) === 'fallback') await S.sendPasswordResetEmail(auth, email, back); };
+  /* the button in the email opens our own page: ?mode=verifyEmail|resetPassword&oobCode=… */
+  Cloud.applyVerify = async code => { await S.applyActionCode(auth, code); if (auth.currentUser) { await S.reload(auth.currentUser); await auth.currentUser.getIdToken(true); Cloud.user = auth.currentUser; } };
+  Cloud.checkReset = code => S.verifyPasswordResetCode(auth, code);
+  Cloud.doReset = (code, pw) => S.confirmPasswordReset(auth, code, pw);
   Cloud.emailVerified = () => !!auth.currentUser?.emailVerified;
-  Cloud.resendVerify = () => auth.currentUser && S.sendEmailVerification(auth.currentUser);
+  Cloud.resendVerify = () => Cloud.sendVerify();
   Cloud.refreshVerify = async () => { if (!auth.currentUser) return false; await S.reload(auth.currentUser); await auth.currentUser.getIdToken(true); Cloud.user = auth.currentUser; return auth.currentUser.emailVerified; };
   Cloud.changePassword = async (oldPw, newPw) => { const u = auth.currentUser; await S.reauthenticateWithCredential(u, S.EmailAuthProvider.credential(u.email, oldPw)); await S.updatePassword(u, newPw); };
   Cloud.whenMe = (ms = 8000) => new Promise(res => { const t0 = Date.now(); (function w() { if (me || Cloud.admin && db?.users?.length || Date.now() - t0 > ms) return res(me); setTimeout(w, 120); })(); });
@@ -336,6 +354,8 @@
     'auth/email-already-in-use': 'That email already has an account. Log in instead.',
     'auth/weak-password': 'Choose a stronger password', 'auth/password-does-not-meet-requirements': 'Password needs 8+ characters with upper and lower case letters and a number',
     'auth/invalid-email': 'Enter a valid email address', 'auth/network-request-failed': 'No internet connection',
+    'ttv/wait': `Email already sent. Check your inbox and spam folder, or try again in ${e?.wait || 1} min.`,
+    'auth/expired-action-code': 'This link has expired. Ask for a new one.', 'auth/invalid-action-code': 'This link was already used or is no longer valid. Ask for a new one.',
     'auth/user-disabled': 'This account has been switched off. Contact Trip To Venda.'
   }[e?.code] || 'Something went wrong, please try again') + (e?.left > 0 && e.left < MAX_TRIES ? ` · ${e.left} ${e.left === 1 ? 'try' : 'tries'} left` : '');
 

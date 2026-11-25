@@ -80,6 +80,12 @@ const ICONS = {
   msg:'<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>',
   share:'<circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><path d="m8.59 13.51 6.83 3.98M15.41 6.51l-6.82 3.98"/>',
   lock:'<rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/>',
+  mail:'<rect x="3" y="5" width="18" height="14" rx="2"/><path d="m3 7 9 6 9-6"/>',
+  eye:'<path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/>',
+  eyeOff:'<path d="M3 3l18 18"/><path d="M10.6 5.1A10.6 10.6 0 0 1 12 5c6.4 0 10 7 10 7a17.6 17.6 0 0 1-3.2 4.1M6.6 6.6C3.8 8.4 2 12 2 12s3.6 7 10 7c1.8 0 3.4-.5 4.8-1.3"/><path d="M9.9 9.9a3 3 0 0 0 4.2 4.2"/>',
+  image:'<rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-5-5L5 21"/>',
+  flip:'<path d="M3 12a9 9 0 0 1 15.5-6.2L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-15.5 6.2L3 16"/><path d="M3 21v-5h5"/>',
+  close:'<path d="M18 6 6 18M6 6l12 12"/>',
   alert:'<path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"/><path d="M12 9v4M12 17h.01"/>',
   check:'<path d="M20 6 9 17l-5-5"/>', x:'<path d="M18 6 6 18M6 6l12 12"/>',
   right:'<path d="m9 18 6-6-6-6"/>', left:'<path d="m15 18-6-6 6-6"/>', plus:'<path d="M12 5v14M5 12h14"/>',
@@ -126,14 +132,141 @@ async function hash(s) {
   try { const b = await crypto.subtle.digest('SHA-256', new TextEncoder().encode('ttv:' + s)); return [...new Uint8Array(b)].map(x => x.toString(16).padStart(2, '0')).join(''); }
   catch { let h = 5381; for (const c of 'ttv:' + s) h = (h * 33) ^ c.charCodeAt(0); return 'f' + (h >>> 0).toString(16); }
 }
-function readImg(file, max = 900) {
-  return new Promise((res, rej) => {
-    if (!file) return res(null);
-    const r = new FileReader();
-    r.onload = () => { const im = new Image(); im.onload = () => { const k = Math.min(1, max / Math.max(im.width, im.height)); const c = document.createElement('canvas'); c.width = Math.round(im.width * k); c.height = Math.round(im.height * k); c.getContext('2d').drawImage(im, 0, 0, c.width, c.height); res(c.toDataURL('image/jpeg', .72)); }; im.onerror = rej; im.src = r.result; };
-    r.onerror = rej; r.readAsDataURL(file);
-  });
+/* ---------------- photos: camera, gallery, quality ---------------- */
+const PHOTOS = {};            // field name -> processed photo (data URL), survives re-renders
+let photoRoute = '';
+function canvasJpeg(src, max, q = .74) {
+  const w0 = src.videoWidth || src.width, h0 = src.videoHeight || src.height, k = Math.min(1, max / Math.max(w0, h0));
+  const c = document.createElement('canvas'); c.width = Math.round(w0 * k); c.height = Math.round(h0 * k);
+  const x = c.getContext('2d'); x.imageSmoothingQuality = 'high'; x.drawImage(src, 0, 0, c.width, c.height);
+  return { canvas: c, url: c.toDataURL('image/jpeg', q) };
 }
+async function decodeImg(file) {
+  if (!file) return null;
+  if (file.size > 30 * 1024 * 1024) throw new Error('big');
+  if (file.type && !file.type.startsWith('image/')) throw new Error('type');
+  if (window.createImageBitmap) { try { return await createImageBitmap(file, { imageOrientation: 'from-image' }); } catch { } }
+  return new Promise((res, rej) => { const u = URL.createObjectURL(file), im = new Image(); im.onload = () => { URL.revokeObjectURL(u); res(im); }; im.onerror = () => { URL.revokeObjectURL(u); rej(new Error('decode')); }; im.src = u; });
+}
+async function readImg(file, max = 1000) {
+  if (!file) return null;
+  const im = await decodeImg(file);
+  const out = canvasJpeg(im, max).url; im.close?.(); return out;
+}
+const photoErr = e => ({ big: 'That photo is too big (over 30 MB). Take a new one.', type: "That file isn't a photo." }[e?.message] || "This photo type can't be opened here (e.g. HEIC). Take a new photo, or choose a JPG or PNG.");
+/* quick checks on the phone: too dark, too bright, glare, blur */
+function photoQuality(img, kind) {
+  const w = 200, h0 = img.videoHeight || img.height, w0 = img.videoWidth || img.width, h = Math.max(1, Math.round(h0 * w / w0));
+  const c = document.createElement('canvas'); c.width = w; c.height = h; const x = c.getContext('2d', { willReadFrequently: true }); x.drawImage(img, 0, 0, w, h);
+  const d = x.getImageData(0, 0, w, h).data, L = new Float32Array(w * h); let sum = 0, hot = 0;
+  for (let i = 0, j = 0; i < d.length; i += 4, j++) { const l = .299 * d[i] + .587 * d[i + 1] + .114 * d[i + 2]; L[j] = l; sum += l; if (l > 248) hot++; }
+  const mean = sum / (w * h); let lap = 0, n = 0;
+  for (let y = 1; y < h - 1; y++) for (let xx = 1; xx < w - 1; xx++) { const i = y * w + xx, v = 4 * L[i] - L[i - 1] - L[i + 1] - L[i - w] - L[i + w]; lap += v * v; n++; }
+  const sharp = lap / Math.max(1, n), issues = [];
+  if (mean < 45) issues.push('Too dark: move to better light or switch on the flash');
+  else if (mean > 225) issues.push('Too bright: move out of direct sun');
+  if (kind === 'card' && hot / (w * h) > .05) issues.push('Glare on the card: tilt it away from the light');
+  if (sharp < (kind === 'card' ? 250 : 60)) issues.push(kind === 'card' ? 'Blurry: hold still, the text must be readable' : 'A bit blurry: hold still and try again');
+  return { ok: !issues.length, issues, mean: Math.round(mean), sharp: Math.round(sharp) };
+}
+const photoKind = name => name === 'selfie' ? 'face' : ['idPhoto', 'licence', 'prdp', 'disc'].includes(name) ? 'card' : 'free';
+const photoMax = name => photoKind(name) === 'card' ? 1100 : name === 'selfie' ? 800 : 1000;
+function setPhoto(name, url, q) {
+  PHOTOS[name] = url;
+  const img = $('#p_' + name); if (img) { img.src = url; img.classList.remove('hidden'); }
+  const box = document.querySelector(`[data-up="${name}"]`);
+  if (box) { box.classList.add('done'); box.querySelector('.u-ic').innerHTML = ic('check'); const cb = box.querySelector('[data-act="camOpen"]'); if (cb) cb.innerHTML = `${ic('camera', 'sm')} Retake`; }
+  const qm = $('#q_' + name); if (qm) qm.innerHTML = !q ? '' : q.ok ? `<span class="okc">${ic('check', 'sm')} Clear photo</span>` : `<span class="warnc">${ic('alert', 'sm')} ${esc(q.issues[0])}</span>`;
+}
+
+/* in-app camera: live preview, guide frame, flash, front/back, retake */
+const Cam = { stream: null, name: '', kind: 'free', facing: 'environment', torch: false, shot: null,
+  stop() { this.stream?.getTracks().forEach(t => t.stop()); this.stream = null; this.torch = false; } };
+const camOK = () => !!(navigator.mediaDevices?.getUserMedia && window.isSecureContext);
+const CAM_TIPS = { card: 'Fit all 4 corners inside the frame · no glare · text sharp', face: 'Face inside the oval · good light · no cap or sunglasses', free: 'Show everything clearly in good light' };
+function camLayer() { let l = $('#camLayer'); if (!l) { l = document.createElement('div'); l.id = 'camLayer'; l.className = 'cam-layer hidden'; l.setAttribute('role', 'dialog'); l.setAttribute('aria-modal', 'true'); document.body.appendChild(l); } return l; }
+function nativeCamera(name, facing) { // fallback: the phone's own camera app
+  const inp = document.createElement('input'); inp.type = 'file'; inp.accept = 'image/*'; inp.setAttribute('capture', facing === 'user' ? 'user' : 'environment');
+  inp.onchange = () => usePhotoFile(name, inp.files[0]); inp.click();
+}
+async function usePhotoFile(name, file) {
+  if (!file) return;
+  const tile = document.querySelector(`[data-up="${name}"]`); tile?.classList.add('busy');
+  try { const im = await decodeImg(file); const q = photoQuality(im, photoKind(name)); const url = canvasJpeg(im, photoMax(name)).url; im.close?.(); setPhoto(name, url, q); if (!q.ok) toast(q.issues[0], 'err'); }
+  catch (e) { toast(photoErr(e), 'err'); }
+  finally { tile?.classList.remove('busy'); }
+}
+function camOpen(name, title) {
+  Cam.name = name; Cam.kind = photoKind(name); Cam.facing = Cam.kind === 'face' ? 'user' : 'environment';
+  if (!camOK()) return nativeCamera(name, Cam.facing);
+  const l = camLayer();
+  l.innerHTML = `<div class="cam-top"><b>${esc(title)}</b><button class="cam-x" data-act="camClose" aria-label="Close camera">${ic('close')}</button></div>
+    <div class="cam-view"><video id="camVideo" class="hidden" playsinline muted autoplay></video><canvas id="camShot" class="hidden"></canvas>
+      <div class="cam-guide g-${Cam.kind}"><span></span></div><div class="cam-msg" id="camMsg">Starting camera…</div></div>
+    <div class="cam-tip" id="camTip">${CAM_TIPS[Cam.kind]}</div>
+    <div class="cam-bar" id="camBar"><button class="cam-sm hidden" id="camTorch" data-act="camTorch" aria-label="Flash">${ic('bolt')}</button><button class="cam-shut" id="camShut" data-act="camShoot" aria-label="Take photo" disabled></button><button class="cam-sm hidden" id="camFlip" data-act="camFlip" aria-label="Switch camera">${ic('flip')}</button></div>
+    <div class="cam-bar hidden" id="camAfter"><button class="btn btn-ghost-light" data-act="camRetake">${ic('camera', 'sm')} Retake</button><button class="btn btn-accent" data-act="camUse">${ic('check', 'sm')} Use photo</button></div>`;
+  l.classList.remove('hidden'); document.body.classList.add('cam-open');
+  camStart();
+}
+async function camStart() {
+  Cam.stop(); Cam.shot = null;
+  const v = $('#camVideo'), msg = $('#camMsg'); if (!v) return;
+  document.querySelector('.cam-guide')?.classList.remove('hidden');
+  $('#camShot').classList.add('hidden'); v.classList.add('hidden'); msg.textContent = 'Starting camera…'; $('#camShut').disabled = true; $('#camBar').classList.remove('hidden'); $('#camAfter').classList.add('hidden'); $('#camTip').textContent = CAM_TIPS[Cam.kind];
+  const big = Cam.kind !== 'face';
+  try {
+    Cam.stream = await navigator.mediaDevices.getUserMedia({ audio: false, video: { facingMode: { ideal: Cam.facing }, width: { ideal: big ? 2560 : 1280 }, height: { ideal: big ? 1440 : 720 } } });
+  } catch (e) {
+    const m = { NotAllowedError: 'Camera blocked. Allow the camera for this site (tap the lock or ⓘ next to the address), or use your phone camera below.', NotFoundError: 'No camera found on this device.', NotReadableError: 'The camera is busy in another app. Close it and try again.', OverconstrainedError: 'This camera mode is not available.', SecurityError: 'Camera needs a secure (https) page.', NotSupportedError: "This browser can't open the camera inside the page.", AbortError: 'The camera stopped. Try again.' }[e.name] || 'Could not start the camera.';
+    document.querySelector('.cam-guide')?.classList.add('hidden');
+    msg.innerHTML = `${esc(m)}<div class="btns" style="justify-content:center;margin-top:12px"><button class="btn btn-accent btn-sm" data-act="camNative">${ic('camera', 'sm')} Use phone camera</button><button class="btn btn-ghost-light btn-sm" data-act="camGallery">${ic('image', 'sm')} Choose a photo</button></div>`;
+    return;
+  }
+  if (!document.body.classList.contains('cam-open')) return Cam.stop(); // closed while starting
+  v.srcObject = Cam.stream; v.classList.toggle('mirror', Cam.facing === 'user');
+  try { await v.play(); } catch { }
+  await new Promise(r => v.videoWidth ? r() : (v.onloadedmetadata = r));
+  msg.textContent = ''; v.classList.remove('hidden'); $('#camShut').disabled = false;
+  const track = Cam.stream.getVideoTracks()[0], caps = track.getCapabilities?.() || {};
+  $('#camTorch').classList.toggle('hidden', !caps.torch);
+  try { const cams = (await navigator.mediaDevices.enumerateDevices()).filter(d => d.kind === 'videoinput'); $('#camFlip').classList.toggle('hidden', cams.length < 2); } catch { }
+  if (caps.focusMode?.includes?.('continuous')) track.applyConstraints({ advanced: [{ focusMode: 'continuous' }] }).catch(() => { });
+}
+function camShoot() {
+  const v = $('#camVideo'); if (!v?.videoWidth) return;
+  const vw = v.videoWidth, vh = v.videoHeight; let sx = 0, sy = 0, sw = vw, sh = vh;
+  if (Cam.kind !== 'free') { // crop to the guide frame (+ a little margin), matching what is on screen (object-fit: cover)
+    const r = v.getBoundingClientRect(), g = document.querySelector('.cam-guide span').getBoundingClientRect(), s = Math.max(r.width / vw, r.height / vh);
+    const ox = (r.width - vw * s) / 2, oy = (r.height - vh * s) / 2, m = Cam.kind === 'card' ? .07 : .12;
+    let gx = g.left - r.left, gy = g.top - r.top, gw = g.width, gh = g.height;
+    gx -= gw * m; gy -= gh * m; gw *= 1 + 2 * m; gh *= 1 + 2 * m;
+    sx = Math.max(0, (gx - ox) / s); sy = Math.max(0, (gy - oy) / s); sw = Math.min(vw - sx, gw / s); sh = Math.min(vh - sy, gh / s);
+    if (Cam.facing === 'user') sx = vw - sx - sw; // preview is mirrored
+  }
+  const c = $('#camShot'); c.width = Math.round(sw); c.height = Math.round(sh);
+  c.getContext('2d').drawImage(v, sx, sy, sw, sh, 0, 0, c.width, c.height);
+  Cam.stop();
+  const q = photoQuality(c, Cam.kind); Cam.shot = { url: canvasJpeg(c, photoMax(Cam.name)).url, q };
+  v.classList.add('hidden'); c.classList.remove('hidden');
+  $('#camBar').classList.add('hidden'); $('#camAfter').classList.remove('hidden');
+  $('#camTip').innerHTML = q.ok ? `<span class="okc">${ic('check', 'sm')} Looks good. Check the details are readable, then use it.</span>` : `<span class="warnc">${ic('alert', 'sm')} ${esc(q.issues.join(' · '))}</span>`;
+}
+function camClose() { Cam.stop(); const l = $('#camLayer'); if (l) { l.classList.add('hidden'); l.innerHTML = ''; } document.body.classList.remove('cam-open'); }
+const CAM_ACTIONS = {
+  camOpen: el => camOpen(el.dataset.name, el.dataset.title || 'Take a photo'),
+  camClose, camShoot, camRetake: () => camStart(),
+  camUse: () => { if (Cam.shot) setPhoto(Cam.name, Cam.shot.url, Cam.shot.q); camClose(); },
+  camFlip: () => { Cam.facing = Cam.facing === 'user' ? 'environment' : 'user'; camStart(); },
+  camTorch: async () => { const t = Cam.stream?.getVideoTracks()[0]; if (!t) return; Cam.torch = !Cam.torch; try { await t.applyConstraints({ advanced: [{ torch: Cam.torch }] }); $('#camTorch').classList.toggle('on', Cam.torch); } catch { toast('Flash not available on this camera', 'err'); } },
+  camNative: () => { const n = Cam.name, f = Cam.facing; camClose(); nativeCamera(n, f); },
+  camGallery: () => { const n = Cam.name; camClose(); document.querySelector(`[data-up="${n}"] input[type=file]`)?.click(); },
+  pwToggle: el => { const i = el.parentElement.querySelector('input'); const show = i.type === 'password'; i.type = show ? 'text' : 'password'; el.innerHTML = ic(show ? 'eyeOff' : 'eye'); el.setAttribute('aria-label', show ? 'Hide password' : 'Show password'); el.setAttribute('aria-pressed', show); i.focus({ preventScroll: true }); }
+};
+document.addEventListener('keydown', e => { if (e.key === 'Escape' && document.body.classList.contains('cam-open')) camClose(); });
+document.addEventListener('visibilitychange', () => { if (document.hidden && Cam.stream) Cam.stop(); else if (!document.hidden && document.body.classList.contains('cam-open') && !Cam.shot) camStart(); });
+const pwField = (attrs) => `<div class="pw-wrap"><input type="password" ${attrs}><button type="button" class="pw-eye" data-act="pwToggle" aria-label="Show password" aria-pressed="false">${ic('eye')}</button></div>`;
+
 function toast(msg, type = '') { const t = $('#toast'); t.innerHTML = ic(type === 'err' ? 'alert' : 'check') + `<span>${esc(msg)}</span>`; t.className = 'toast show ' + type; clearTimeout(t._h); t._h = setTimeout(() => t.className = 'toast', 3400); }
 function modal(html) { $('#sheet').innerHTML = html; $('#modal').classList.remove('hidden'); }
 function closeModal() { $('#modal').classList.add('hidden'); $('#sheet').innerHTML = ''; }
@@ -172,6 +305,11 @@ const DB_KEY = 'ttv_db_v7'; // v7 = fresh start, no sample data
 /* Vehicles allowed on Trip To Venda */
 /* Card / Instant EFT payments need a payment provider (e.g. PayFast). Until one is connected, live trips are cash only. */
 const PAY_ONLINE = !window.Cloud?.on || !!window.Cloud?.cfg?.onlinePayments;
+/* ---------------- Rules & policies ---------------- */
+const POLICY_V = '1.0 · 25 November 2026';
+// pickups and drop offs are door to door: never at taxi ranks, bus terminals or taxi stops
+const RANK_RE = /\b(taxi\s*rank|rank|taxi\s*stop|taxi\s*stand|bus\s*terminus|bus\s*terminal|terminus|park\s*station|bosman\s*station)\b/i;
+const rankMsg = 'Trip To Venda is door to door. Use a home, work or business address, not a taxi rank, taxi stop or bus terminal.';
 const VTYPES = { car: { label: 'Private car', max: 4, eg: 'e.g. Toyota Corolla, VW Polo', hint: 'Sedan or hatchback, up to 4 passengers' }, seven: { label: '7 seater', max: 6, eg: 'e.g. Toyota Avanza, Suzuki Ertiga, Toyota Innova', hint: '7 seats including the driver, up to 6 passengers' } };
 const vType = v => VTYPES[v?.type] ? v.type : ((v?.seats || 4) > 4 ? 'seven' : 'car');
 const vLabel = v => VTYPES[vType(v)].label;
@@ -374,8 +512,13 @@ function placePicker(prefix, label, prov, town) {
   return `<div class="grid g2"><div class="field"><label>${label} province</label><select name="${prefix}Prov" data-prov="${prefix}" required>${selectOpts(PROVS, prov)}</select></div>
   <div class="field"><label>Town</label><select name="${prefix}Town" data-town="${prefix}" required>${selectOpts(towns(prov), town)}</select></div></div>`;
 }
-function upload(name, title, hint, src, capture = '') {
-  return `<label class="upload ${src ? 'done' : ''}"><input type="file" name="${name}" accept="image/*" ${capture} data-preview="p_${name}"><div class="u-ic">${ic(src ? 'check' : 'camera')}</div><b>${title}</b><span class="hint">${hint}</span><img id="p_${name}" class="${src ? '' : 'hidden'}" src="${src || ''}" alt=""></label>`;
+function upload(name, title, hint, src) {
+  src = PHOTOS[name] || src;
+  return `<div class="upload ${src ? 'done' : ''}" data-up="${name}"><div class="u-ic">${ic(src ? 'check' : 'camera')}</div><b>${title}</b><span class="hint">${hint}</span>
+    <img id="p_${name}" class="${src ? '' : 'hidden'}" src="${src || ''}" alt="${esc(title)}" data-act="img">
+    <div class="u-btns"><button type="button" class="btn btn-sm" data-act="camOpen" data-name="${name}" data-title="${esc(title)}">${ic('camera', 'sm')} ${src ? 'Retake' : 'Take photo'}</button>
+    <label class="btn btn-sm btn-ghost">${ic('image', 'sm')} Gallery<input type="file" accept="image/*" data-photo="${name}" class="u-file"></label></div>
+    <div class="u-q small" id="q_${name}"></div></div>`;
 }
 const HILLS = `<svg class="hills" viewBox="0 0 1440 140" preserveAspectRatio="none"><path d="M0 90 C120 50 220 40 330 70 C430 96 520 30 640 40 C760 50 820 100 960 80 C1080 62 1160 20 1290 46 C1360 60 1410 70 1440 66 V140 H0Z" fill="#0d5236" opacity=".55"/><path d="M0 110 C160 80 260 96 400 104 C560 114 640 70 800 84 C950 98 1060 120 1200 100 C1320 84 1390 92 1440 98 V140 H0Z" fill="#f4f6f3"/></svg>`;
 const empty = (icon, title, text, action = '') => `<div class="card empty" style="grid-column:1/-1"><div class="ic">${ic(icon, 'lg')}</div><h3>${title}</h3><p>${text}</p>${action}</div>`;
@@ -569,7 +712,7 @@ function bookForm(t, left, preType) {
     </div>
     <div class="fstep" data-s="3">
       <div class="grid g2"><div class="field"><label>Normal bags</label>${counter('bags', parcel ? 0 : 1, 0, 4)}</div><div class="field"><label>Extra large bags / boxes</label>${counter('bigBags', 0, 0, 3)}<div class="hint">${t.bagFee ? R(t.bagFee) + ' each' : 'No extra fee'}</div></div></div>
-      <div class="field">${upload('luggagePhoto', 'Add a photo of your luggage / parcel', 'Required for bags and parcels, helps the driver plan space and protects you.', '', 'capture="environment"')}</div>
+      <div class="field">${upload('luggagePhoto', 'Add a photo of your luggage / parcel', 'Required for bags and parcels, helps the driver plan space and protects you.', '')}</div>
       <div class="field"><label>What's in it?</label><input name="luggageDesc" placeholder="e.g. black suitcase, blue Shoprite bag, 20L bucket"></div>
     </div>
     <div class="fstep" data-s="4">
@@ -641,7 +784,7 @@ async function submitBooking(f, payMethod) {
   if (type === 'seat' && seatsLeft(t) < seats) return toast('Not enough seats left', 'err');
   const p = formPrice(f), online = f.pay.value === 'online';
   const b = { id: uid('b'), tripId: t.id, riderId: me.id, driverId: t.driverId, type, seats, pickup: f.pickup.value.trim(), dropoff: f.dropoff.value.trim(), pickupPin: f._pins?.pickup || null, dropPin: f._pins?.dropoff || null,
-    bags: +f.bags.value, bigBags: +f.bigBags.value, luggageDesc: f.luggageDesc.value.trim(), luggagePhoto: await readImg(f.luggagePhoto.files[0], 800), note: f.note.value.trim(), recvName: f.recvName.value.trim(), recvPhone: f.recvPhone.value.trim(),
+    bags: +f.bags.value, bigBags: +f.bigBags.value, luggageDesc: f.luggageDesc.value.trim(), luggagePhoto: PHOTOS.luggagePhoto || '', note: f.note.value.trim(), recvName: f.recvName.value.trim(), recvPhone: f.recvPhone.value.trim(),
     ...p, pin: String(1000 + rndInt(9000)), deliveryCode: type === 'parcel' ? String(100000 + rndInt(900000)) : '',
     status: 'requested', pay: online ? 'online' : 'cash', payMethod: online ? payMethod : 'Cash', payStatus: online ? 'held' : 'due', created: Date.now() };
   db.bookings.push(b);
@@ -652,7 +795,8 @@ function stepValid(f, s) {
   const t = tripById(f.dataset.trip), fail = m => (toast(m, 'err'), false);
   if (s === 1) { if (f.type.value === 'seat' && !(+f.seats.value)) return fail('This trip is full, choose “Send a parcel”'); if (f.type.value === 'parcel' && (!f.recvName.value.trim() || !isSAphone(f.recvPhone.value))) return fail("Add the receiver's name and a valid cellphone"); }
   if (s === 2 && (f.pickup.value.trim().length < 6 || f.dropoff.value.trim().length < 6)) return fail('Please add full pickup and drop off addresses');
-  if (s === 3) { const n = +f.bags.value + +f.bigBags.value; if ((n > 0 || f.type.value === 'parcel') && !f.luggagePhoto.files[0]) return fail('Please add a photo of your luggage / parcel'); if (f.type.value === 'seat' && n > t.maxBags + 1) return fail(`This driver allows about ${t.maxBags} bags, chat to them first`); }
+  if (s === 2 && (RANK_RE.test(f.pickup.value) || RANK_RE.test(f.dropoff.value))) return fail(rankMsg);
+  if (s === 3) { const n = +f.bags.value + +f.bigBags.value; if ((n > 0 || f.type.value === 'parcel') && !PHOTOS.luggagePhoto) return fail('Please add a photo of your luggage / parcel'); if (f.type.value === 'seat' && n > t.maxBags + 1) return fail(`This driver allows about ${t.maxBags} bags, chat to them first`); }
   if (s === 4 && !f.agree.checked) return fail('Please tick the luggage confirmation');
   return true;
 }
@@ -684,16 +828,16 @@ V.signup = q => {
     <div class="field"><label>Full name (as on your ID)</label><input name="name" required autocomplete="name"></div>
     <div class="grid g2"><div class="field"><label>Cellphone</label><input name="phone" type="tel" required placeholder="e.g. 071 234 5678" autocomplete="tel"></div><div class="field"><label>Gender</label><select name="gender" required><option value="">Select</option><option>Female</option><option>Male</option><option>Prefer not to say</option></select></div></div>
     <div class="field"><label>Email</label><input name="email" type="email" required autocomplete="email"></div>
-    <div class="field"><label>Password</label><input name="password" type="password" minlength="8" required autocomplete="new-password"><div class="hint">At least 8 characters, with upper and lower case letters and a number.</div></div>
+    <div class="field"><label>Password</label>${pwField('name="password" minlength="8" required autocomplete="new-password"')}<div class="hint">At least 8 characters, with upper and lower case letters and a number.</div></div>
     <div class="card" style="background:#fafcfb;margin-bottom:14px"><div class="card-title">${ic('alert', 'sm')}<b class="small">Emergency contact</b></div><div class="grid g2"><div class="field" style="margin:0"><label>Name</label><input name="emergencyName" required placeholder="e.g. Mom"></div><div class="field" style="margin:0"><label>Cellphone</label><input name="emergencyPhone" type="tel" required placeholder="e.g. 071 234 5678"></div></div></div>
-    <label class="check"><input type="checkbox" required> I agree to the community rules and consent to my ID being checked for everyone's safety (POPIA).</label><br>
+    <label class="check"><input type="checkbox" name="agree" required> I agree to the <a href="#/rules?tab=terms" target="_blank">Terms of use</a>, <a href="#/rules?tab=community" target="_blank">Community rules</a> and <a href="#/rules?tab=privacy" target="_blank">Privacy policy</a>, and consent to my ID being checked for everyone's safety (POPIA).</label><br>
     <button class="btn btn-block btn-lg">Create account</button>
     <p class="small muted" style="text-align:center;margin-top:14px">Already have an account? <a href="#/login" class="b">Log in</a></p>
   </form>`);
 };
 V.login = q => authShell('Welcome back', 'Log in to book, track and manage your trips.', `<form id="loginForm" data-next="${esc(q.next || '')}"><!--head-->
     <div class="field"><label>${window.Cloud?.on ? 'Email' : 'Email or cellphone'}</label><input name="login" ${window.Cloud?.on ? 'type="email"' : ''} required autocomplete="username"></div>
-    <div class="field"><label>Password</label><input name="password" type="password" required autocomplete="current-password"></div>
+    <div class="field"><label>Password</label>${pwField('name="password" required autocomplete="current-password"')}</div>
     <button class="btn btn-block btn-lg">Log in</button>
     <p class="small muted" style="text-align:center;margin-top:14px">New here? <a href="#/signup" class="b">Create an account</a></p>
     <p class="small muted" style="text-align:center;margin-top:8px"><a href="#" data-act="forgot">Forgot your password?</a></p>
@@ -722,7 +866,7 @@ V.verify = () => {
         <div class="field"><label>Document type</label><select name="idType"><option ${me.idType !== 'Passport' ? 'selected' : ''}>SA ID</option><option ${me.idType === 'Passport' ? 'selected' : ''}>Passport</option></select></div>
         <div class="field"><label>ID / passport number</label><input name="idNumber" required value="${esc(me.idNumber || '')}" inputmode="numeric" autocomplete="off"><div class="hint" id="idCheck">${idc ? (idc.ok ? `<span class="okc">${ic('check', 'sm')} Valid SA ID · born ${niceD(idc.dob)} · age ${idc.age}</span>` : `<span class="bad">${idc.msg}</span>`) : 'Never shown to other users.'}</div></div>
       </div>
-      <div class="grid g2" style="margin-bottom:14px">${upload('idPhoto', 'Photo of ID / passport', 'All 4 corners, no glare, details readable', docs.idPhoto)}${upload('selfie', 'Take a selfie', 'We compare it with your ID photo, it becomes your profile photo', docs.selfie, 'capture="user"')}</div>
+      <div class="grid g2" style="margin-bottom:14px">${upload('idPhoto', 'Photo of ID / passport', 'All 4 corners, no glare, details readable', docs.idPhoto)}${upload('selfie', 'Take a selfie', 'We compare it with your ID photo, it becomes your profile photo', docs.selfie)}</div>
       <div class="field"><label>Home address</label><input name="homeAddress" value="${esc(me.homeAddress || '')}" placeholder="Used to fill in your pickups"></div>
       ${drv ? `<div class="card-title" style="margin-top:22px">${ic('file')}<h3>3 · Driver's licence & PrDP</h3></div>
       <div class="note" style="margin-bottom:14px">${ic('info')}<span class="small">South African law requires a <b>Professional Driving Permit (PrDP, category P)</b> to carry passengers for payment. Drivers must be 21 or older.</span></div>
@@ -748,6 +892,12 @@ V.verify = () => {
         <div class="field"><label>Licence disc expiry</label><input type="date" name="discExpiry" required value="${esc(v.discExpiry || '')}"></div>
       </div>
       <div class="grid g2" style="margin-bottom:14px">${upload('disc', 'Vehicle licence disc', 'Photo of the disc on the windscreen', docs.disc)}${upload('carPhoto', 'Car photo with number plate', 'Plate must be readable, riders check it before getting in', docs.carPhoto)}</div>` : ''}
+      ${drv ? `<div class="field" style="margin-top:6px"><label>Operating licence or permit number <span class="xs muted">(if you have one)</span></label><input name="opLicence" value="${esc(me.opLicence || '')}" placeholder="As issued by the regulatory entity" style="text-transform:uppercase"></div>
+      <div class="decl"><div class="card-title" style="margin-bottom:8px">${ic('shield')}<h3>4 · Driver declaration</h3></div>
+        <label class="check"><input type="checkbox" name="d1" required ${me.driverDecl ? 'checked' : ''}> I only offer seats on trips I am making myself, booked in advance through Trip To Venda. I don't roam, stand for hire, or pick up anyone who did not book.</label>
+        <label class="check"><input type="checkbox" name="d2" required ${me.driverDecl ? 'checked' : ''}> I never load or offload at taxi ranks, taxi stops or bus terminals, I never tout for passengers, and my car has no taxi signs, roof light or meter.</label>
+        <label class="check"><input type="checkbox" name="d3" required ${me.driverDecl ? 'checked' : ''}> I hold every licence and permit the law requires to carry passengers for payment (including my PrDP and any operating licence), my car is roadworthy and insured, and I am responsible for any fines.</label>
+        <p class="xs muted" style="margin:6px 0 0">Read the <a href="#/rules?tab=drivers" target="_blank">Driver rules</a> and <a href="#/rules?tab=position" target="_blank">our position on the taxi industry</a>.</p></div>` : ''}
       <button class="btn btn-block btn-lg" ${locked ? 'disabled' : ''}>${me.status === 'pending' ? 'Update & resubmit' : locked ? 'Verified ✓' : 'Submit for safety review'}</button>
     </form>
   </div>`;
@@ -771,19 +921,57 @@ F.verifyForm = async f => {
     const vs = +f.vseats.value; if (!(vs >= 1 && vs <= vt.max)) return fail(`A ${vt.label.toLowerCase()} can take 1 to ${vt.max} passengers`);
   }
   btn.disabled = true; btn.textContent = 'Uploading…';
-  const imgs = {}; try { for (const k of fields) { const file = f[k]?.files[0]; if (file) imgs[k] = await readImg(file, 800); } } catch { return fail('Could not read one of the photos'); }
-  me.docs = Object.assign({}, me.docs, imgs);
+  const imgs = {}; fields.forEach(k => { if (PHOTOS[k]) imgs[k] = PHOTOS[k]; });
+  let docs = Object.assign({}, me.docs, imgs);
+  for (const [max, q] of [[1000, .7], [900, .64], [800, .58]]) { // shrink if the set is too big to store
+    const size = Object.entries(docs).filter(([k]) => k !== 'selfie').reduce((a, [, v]) => a + (v?.length || 0), 0);
+    if (size < 880000) break;
+    for (const k of Object.keys(docs)) if (k !== 'selfie' && docs[k]) { const im = await new Promise(r => { const i = new Image(); i.onload = () => r(i); i.onerror = () => r(null); i.src = docs[k]; }); if (im) docs[k] = canvasJpeg(im, max, q).url; }
+  }
+  me.docs = docs;
   const names = { idPhoto: 'ID photo', selfie: 'selfie', licence: 'licence card', prdp: 'PrDP', disc: 'licence disc', carPhoto: 'car photo with plate' };
   const missing = fields.filter(k => !me.docs[k]);
   if (missing.length) return fail('Please add: ' + missing.map(k => names[k]).join(', '));
   Object.assign(me, { idType, idNumber, homeAddress: f.homeAddress.value.trim() });
   if (drv) Object.assign(me, { licenceNo: f.licenceNo.value.trim().toUpperCase(), licenceCode: f.licenceCode.value, licenceExpiry: f.licenceExpiry.value, prdpNo: f.prdpNo.value.trim().toUpperCase(), prdpExpiry: f.prdpExpiry.value, vehicle: { type: f.vtype.value, make: f.make.value.trim(), year: +f.year.value, colour: f.colour.value.trim(), reg: f.reg.value.trim().toUpperCase(), seats: +f.vseats.value, discExpiry: f.discExpiry.value }, wallet: me.wallet || { balance: 0, ledger: [] }, acceptsCash: me.acceptsCash ?? true });
+  if (drv) { if (!(f.d1?.checked && f.d2?.checked && f.d3?.checked)) return fail('Please tick all three driver declarations'); me.driverDecl = { v: POLICY_V, at: Date.now() }; me.opLicence = (f.opLicence?.value || '').trim().toUpperCase(); }
   me.status = 'pending';
   notifyAdmins(`${me.name} (${me.role}) submitted documents for verification.`, '#/admin?tab=verify');
   save(); toast("Submitted ✔ Our safety team will review your documents"); go('#/dashboard');
 };
 
-const emailBanner = () => window.Cloud?.on && me && me.role !== 'admin' && !Cloud.emailVerified() ? `<div class="banner warn">${ic('info')}<span>Confirm your email: we sent a link to <b>${esc(me.email || '')}</b>. You can book and post trips once it's confirmed.</span><button class="btn btn-sm" data-act="emailDone">I've confirmed</button><button class="btn btn-sm btn-ghost" data-act="emailResend">Send again</button></div>` : '';
+const emailBanner = () => window.Cloud?.on && me && me.role !== 'admin' && !Cloud.emailVerified() ? `<div class="banner warn">${ic('mail')}<span>Confirm your email: we sent a link to <b>${esc(me.email || '')}</b>. You can book and post trips once it's confirmed.</span><button class="btn btn-sm" data-act="emailDone">I've confirmed</button><button class="btn btn-sm btn-ghost" data-act="emailResend">Send again</button></div>` : '';
+V.authAction = () => {
+  const a = actionParams();
+  const shell = inner => `<div class="wrap page"><div class="aa-card card pad-lg"><div class="aa-head"><img src="img/emblem.webp" alt=""><div>Trip To <b>Venda</b><small>Door to door lifts</small></div></div><div id="aaBody">${inner}</div></div></div>`;
+  if (!window.Cloud?.on || !a) return shell(`<h2>Link not available</h2><p class="muted">Open the newest email we sent you, or log in to ask for a new link.</p><a class="btn btn-block" href="#/login">Log in</a>`);
+  if (a.mode === 'verifyEmail') return shell(`<div class="aa-ic">${ic('mail')}</div><h2>Confirm your email</h2><p class="muted">One tap and your Trip To Venda account is verified. You can then book lifts, post trips and get trip updates.</p>
+    <button class="btn btn-accent btn-lg btn-block" data-act="aaVerify">${ic('check')} Verify my account</button>`);
+  if (a.mode === 'resetPassword') { afterRender.push(async () => { try { const em = await Cloud.checkReset(a.code); $('#aaFor').innerHTML = `For <b>${esc(em)}</b>`; } catch (e) { $('#aaBody').innerHTML = aaFail(e); } });
+    return shell(`<div class="aa-ic">${ic('lock')}</div><h2>Choose a new password</h2><p class="muted" id="aaFor">Checking your link…</p>
+    <form id="resetPwForm"><div class="field"><label>New password</label>${pwField('name="pw" required minlength="8" autocomplete="new-password"')}<div class="hint">At least 8 characters, with upper and lower case letters and a number.</div></div>
+    <div class="field"><label>Type it again</label>${pwField('name="pw2" required minlength="8" autocomplete="new-password"')}</div>
+    <button class="btn btn-accent btn-lg btn-block">${ic('check')} Save new password</button></form>`); }
+  return shell(`<h2>Nothing to do here</h2><p class="muted">This link isn't used by Trip To Venda.</p><button class="btn btn-block" data-act="aaHome">Go to Trip To Venda</button>`);
+};
+const aaFail = e => `<div class="aa-ic bad">${ic('info')}</div><h2>This link can't be used</h2><p class="muted">${esc(Cloud.err(e))}</p>${me ? `<button class="btn btn-block" data-act="emailResend">Send me a new link</button>` : `<a class="btn btn-block" href="#/login">Log in</a>`}<button class="btn btn-ghost btn-block" style="margin-top:8px" data-act="aaHome">Go to Trip To Venda</button>`;
+const aaDone = (title, text, btn, hash) => `<div class="aa-ic ok">${ic('check')}</div><h2>${title}</h2><p class="muted">${text}</p><button class="btn btn-accent btn-lg btn-block" data-act="aaLeave" data-to="${hash}">${btn}</button>`;
+F.resetPwForm = async f => {
+  const a = actionParams(), pw = f.pw.value;
+  if (pw !== f.pw2.value) return toast("The two passwords don't match", 'err');
+  if (pw.length < 8 || !/[a-z]/.test(pw) || !/[A-Z]/.test(pw) || !/\d/.test(pw)) return toast('Password needs 8+ characters with upper and lower case letters and a number', 'err');
+  const b = f.querySelector('button:not([type=button])'); b.disabled = true;
+  try { await Cloud.doReset(a.code, pw); try { localStorage.removeItem('ttv_lock'); } catch { } $('#aaBody').innerHTML = aaDone('Password changed ✔', 'You can now log in with your new password.', 'Log in', '#/login'); }
+  catch (e) { b.disabled = false; $('#aaBody').innerHTML = aaFail(e); }
+};
+const AA_ACTIONS = {
+  aaVerify: async el => { el.disabled = true; el.innerHTML = 'Verifying…';
+    try { await Cloud.applyVerify(actionParams().code); if (me && me.role !== 'admin') { me.phoneVerified = true; save(); }
+      $('#aaBody').innerHTML = aaDone('Your email is confirmed ✔', me ? 'Thank you. Next, add your documents so we can verify you.' : 'Thank you. Log in to carry on.', me ? (me.role === 'admin' ? 'Open the Control room' : 'Continue') : 'Log in', me ? (me.role === 'admin' ? '#/admin' : '#/verify') : '#/login'); }
+    catch (e) { $('#aaBody').innerHTML = aaFail(e); } },
+  aaLeave: el => leaveAction(el.dataset.to),
+  aaHome: () => leaveAction('#/')
+};
 V.dashboard = q => {
   if (!me) return V.login({ next: '#/dashboard' });
   if (me.role === 'admin') return V.admin(q);
@@ -1257,7 +1445,7 @@ function vcardHTML(u) {
       return `<div class="card pad-lg vcard">
         <div class="row">${avatar(u)}<div><b>${esc(u.name)}</b> <span class="badge ${drv ? 'b-blue' : ''}">${u.role}</span><div class="xs muted">${esc(u.phone)} · ${esc(u.email)}</div></div></div>
         <div class="step-label" style="margin:14px 0 6px">Automatic checks</div>
-        <ul class="checks">${chk(u.phoneVerified, window.Cloud?.on ? 'Email confirmed' : 'Cellphone verified by SMS')}${chk(idc.ok, idc.ok ? `${esc(u.idType)} valid${idc.age ? ` · born ${niceD(idc.dob)} · age ${idc.age}` : ''}` : 'ID number invalid')}${idc.age != null ? chk(idc.age >= (drv ? 21 : 18), `Age ${drv ? '21+ (PrDP rule)' : '18+'}`) : ''}${idc.gender ? chk(idc.gender === u.gender || u.gender === 'Prefer not to say', `Gender in ID (${idc.gender}) matches profile`) : ''}
+        <ul class="checks">${chk(u.phoneVerified, window.Cloud?.on ? 'Email confirmed' : 'Cellphone verified by SMS')}${u.role === 'driver' ? chk(!!u.driverDecl, u.driverDecl ? `Driver declaration signed (no ranks, no touting, own licences) · ${new Date(u.driverDecl.at).toLocaleDateString('en-ZA')}` : 'Driver declaration not signed') + (u.opLicence ? chk(true, 'Operating licence / permit: ' + esc(u.opLicence)) : '') : ''}${''}${chk(idc.ok, idc.ok ? `${esc(u.idType)} valid${idc.age ? ` · born ${niceD(idc.dob)} · age ${idc.age}` : ''}` : 'ID number invalid')}${idc.age != null ? chk(idc.age >= (drv ? 21 : 18), `Age ${drv ? '21+ (PrDP rule)' : '18+'}`) : ''}${idc.gender ? chk(idc.gender === u.gender || u.gender === 'Prefer not to say', `Gender in ID (${idc.gender}) matches profile`) : ''}
           ${drv ? chk(licenceOK(u.licenceNo), `Licence ${esc(u.licenceNo || 'not given')} · code ${esc(u.licenceCode || 'not given')}`) + chk(future(u.licenceExpiry), `Licence expires ${niceD(u.licenceExpiry)}`) + chk(!!u.prdpNo && future(u.prdpExpiry), `PrDP ${esc(u.prdpNo || 'not given')} · expires ${niceD(u.prdpExpiry)}`) + chk(plateOK(v.reg), `Number plate ${esc(v.reg || 'not given')}`) + chk(future(v.discExpiry), `Licence disc expires ${niceD(v.discExpiry)}`) : ''}</ul>
         ${drv ? `<p class="small" style="margin-top:8px">🚗 ${esc(v.year || '')} ${esc(v.colour)} ${esc(v.make)} · ${esc(v.seats)} seats</p>` : ''}
         <div class="thumbs" style="margin-top:12px">${img(u.docs.idPhoto, 'ID')}${img(u.docs.selfie, 'Selfie')}${drv ? img(u.docs.licence, 'Licence') + img(u.docs.prdp, 'PrDP') + img(u.docs.disc, 'Disc') + img(u.docs.carPhoto, 'Car + plate') : ''}</div>
@@ -1433,6 +1621,46 @@ V.how = () => `<div class="wrap page">
   <div class="btns" style="margin:26px 0 10px;justify-content:center"><a class="btn btn-accent btn-lg" href="#/search">${ic('search', 'sm')} Find a lift</a><a class="btn btn-ghost btn-lg" href="#/signup?role=driver">${ic('car', 'sm')} Drive with us</a><a class="btn btn-ghost btn-lg" href="#/safety">${ic('shield', 'sm')} Safety</a></div>
 </div>`;
 
+V.rules = q => {
+  const tab = q.tab || 'position';
+  const T = [['position', 'Our position'], ['community', 'Community rules'], ['drivers', 'Driver rules'], ['terms', 'Terms of use'], ['privacy', 'Privacy (POPIA)']];
+  const li = a => `<ul class="pol-list">${a.map(x => `<li>${x}</li>`).join('')}</ul>`;
+  const sec = (h, body) => `<div class="pol-sec"><h3>${h}</h3>${body}</div>`;
+  const P = {
+    position: `<div class="pol-lead">${ic('shield')}<p><b>Trip To Venda is not a taxi service and does not compete for taxi passengers.</b> We are a booking platform that lets people who are already travelling long distance between Venda and the rest of South Africa share their empty seats with verified riders, booked in advance, door to door.</p></div>
+      ${sec('What we are', li(['A technology platform that connects verified riders with verified drivers who have <b>already planned their own trip</b>.', 'Every seat is <b>booked and confirmed in the app before the trip</b>. There is no street hailing, no roaming for passengers and no walk up service.', 'Pickups and drop offs are <b>at homes, workplaces and businesses</b> that the rider enters when booking.']))}
+      ${sec('What we are not', li(['We do <b>not</b> own vehicles, employ drivers, run routes, ranks, stops or a fleet.', 'We do <b>not</b> load or offload at taxi ranks, taxi stops, bus terminals or holding areas, and we do not allow drivers to do so.', 'We do <b>not</b> allow touting, calling for passengers, hooting for passengers, roof signs, taxi branding or meters on vehicles used through Trip To Venda.', 'We are <b>not</b> a metered taxi, minibus taxi, bus or e-hailing operator, and we do not set routes or timetables. Drivers choose their own trip, date and price.']))}
+      ${sec('Respect for the taxi industry', `<p>The taxi industry moves millions of South Africans every day and we respect it. Trip To Venda serves a different need: pre-booked, long distance, door to door travel with people who are going anyway. We welcome conversation with taxi associations, and <b>licensed taxi operators are welcome to join as drivers</b> under the same rules as everyone else.</p>`)}
+      ${sec('The law', `<p>Every driver must hold the licences and permits the law requires to carry passengers for payment, including a valid driving licence and <b>Professional Driving Permit (PrDP)</b>, and any <b>operating licence or permit required under the National Land Transport Act</b>. Drivers confirm this when they register, and they alone are responsible for complying with it. If a driver is stopped by an authorised officer, they must cooperate fully.</p>`)}
+      ${sec('If there is tension on the road or at pickup', li(['Stay calm. <b>Never argue, threaten or fight</b>, and never block anyone.', 'If you feel unsafe, leave the area, cancel the pickup if needed, and meet at a safer address.', 'Use the <b>SOS</b> button or call SAPS 10111 / 112 in an emergency, then report it to the Control room in the app.', 'Do not post about incidents on social media while they are happening. Our team will help.']))}
+      <p class="xs muted">Version ${POLICY_V}. These policies are written in plain language. They are not legal advice and they do not replace the law.</p>`,
+    community: `${sec('For everyone', li(['Treat everyone with respect. No discrimination because of race, gender, religion, nationality, disability, sexual orientation or language.', 'Zero tolerance for violence, threats, harassment, sexual misconduct, weapons, or anyone under the influence of alcohol or drugs.', 'Use your real name, real photo and real documents. One person, one account.', 'Book, chat and pay through Trip To Venda. Never give your PIN to anyone except your driver at pickup.', 'Respect privacy: do not share, screenshot or post other people’s details, photos or trip information.', 'Reviews must be honest and about the trip.']))}
+      ${sec('For riders', li(['Be ready at your pickup address on time. Use a home, work or business address, not a taxi rank or bus terminal.', 'Photograph your luggage truthfully. No illegal, stolen, dangerous or prohibited items, in bags or in parcels.', 'Wear your seatbelt and follow the driver’s trip rules (for example no smoking).', 'Cancel in the app as early as possible if your plans change.']))}
+      ${sec('Women only trips', `<p>Female drivers may offer trips that only female riders can book. Gender is taken from the registration details and checked against ID.</p>`)}
+      ${sec('What happens if rules are broken', li(['A warning, a temporary suspension, or a permanent ban, depending on how serious it is.', 'Serious matters (violence, theft, fraud, sexual misconduct) are reported to SAPS, and we cooperate with lawful requests from the police.']))}`,
+    drivers: `${sec('Only trips you are making yourself', li(['Only post trips <b>you are actually making</b>, on a date and time <b>you choose</b>. Trip To Venda never assigns trips, routes or shifts.', 'All passengers must be <b>booked through the app before the trip</b>. Do not pick up anyone who did not book.', 'Do not roam, cruise or wait for passengers. Do not stand for hire.']))}
+      ${sec('No ranks, no touting', li(['Never load or offload at taxi ranks, taxi stops, bus terminals or holding areas, or anywhere a rider asks you to that is one.', 'Never tout, call or hoot for passengers on taxi routes or anywhere else.', 'No roof signs, taxi branding, stickers that say taxi, or meters on your vehicle.']))}
+      ${sec('Licences, vehicle and insurance', li(['Valid driver’s licence and <b>PrDP (category P)</b> at all times. Drivers must be 21 or older.', 'Any operating licence or permit the law requires for carrying passengers for payment is <b>your responsibility</b>.', 'Your vehicle must be roadworthy, licensed (valid disc) and insured. Passenger liability cover is strongly recommended.', 'Never carry more passengers than your vehicle is licensed for: up to 4 in a private car, up to 6 in a 7 seater.']))}
+      ${sec('Prices and money', li(['You set your own seat, bag and parcel prices. Keep them fair and as shown in the app.', 'Collect only the amount shown in the app. No extra charges on the road.', 'Fines, tolls, fuel, impoundment costs and penalties are your responsibility.']))}
+      ${sec('Safety at pickup', li(['Check the rider’s face against their photo and ask for the PIN. Wrong PIN, don’t start.', 'Follow the road rules, keep to speed limits, and never drive tired, distracted or under the influence.']))}`,
+    terms: `${sec('1. Who we are and what we do', `<p>Trip To Venda ("we") runs a website and app that let riders find and book seats, and send parcels, on trips that independent drivers plan and offer. We provide the platform, verification, booking, messaging, tracking and safety tools. <b>We do not provide transport.</b> The agreement to travel is between the rider and the driver.</p>`)}
+      ${sec('2. Accounts', li(['You must be 18 or older, give true details and keep your password secret.', 'We may check your ID and documents, and we may decline, suspend or close accounts that break these terms, the community rules or the law.']))}
+      ${sec('3. Drivers are independent', li(['Drivers are not our employees, agents or contractors. They decide whether, when, where and at what price to travel.', 'Drivers confirm that they hold every licence, permit, insurance and roadworthy certificate the law requires, and they accept full responsibility for complying with transport, traffic and tax laws.', 'Drivers indemnify Trip To Venda against claims, fines and costs caused by their own failure to comply.']))}
+      ${sec('4. Fees and payments', li([`Riders pay the driver's price plus a booking fee of ${R(FEES.seat)} per seat (${R(FEES.parcel)} per parcel), shown before booking.`, `Drivers pay a platform fee of ${FEES.commission * 100}% per seat booking (${FEES.pro * 100}% with Pro, ${FEES.parcelCommission * 100}% for parcels). For cash trips the fee comes off the driver's wallet.`, 'Prices include everything shown at booking. No one may charge more on the road.']))}
+      ${sec('5. Cancellations', li(['Riders and drivers can cancel in the app. Please cancel as early as possible.', 'Repeated late cancellations or no shows may lead to suspension.']))}
+      ${sec('6. Parcels', `<p>Senders must describe parcels truthfully. No illegal, dangerous, perishable without notice, or prohibited goods. Drivers may refuse a parcel that does not match its description or photo.</p>`)}
+      ${sec('7. Our responsibility', `<p>We work hard to verify people and keep the platform safe, but we cannot control what happens on the road. To the extent the law allows, we are not liable for loss or damage caused by a driver, rider or third party. Nothing in these terms limits rights you have under the Consumer Protection Act or other South African law.</p>`)}
+      ${sec('8. Changes and law', `<p>We may update these terms and will show the new version in the app. South African law applies.</p>`)}
+      <p class="xs muted">Version ${POLICY_V}.</p>`,
+    privacy: `${sec('What we collect and why', li(['<b>Account:</b> name, email, cellphone, gender, emergency contact, to run your account and keep trips safe.', '<b>Verification:</b> ID number and photo, selfie, and for drivers licence, PrDP, disc and car photos, to confirm who you are.', '<b>Trips:</b> bookings, pickup and drop off addresses, luggage photos, messages and live location during a trip, to deliver the service and help in an emergency.']))}
+      ${sec('Who can see it', li(['<b>Public:</b> your first name and initial, photo, rating and (for drivers) car make and colour.', '<b>The other person on your booking</b>: your full name, cellphone and (for drivers) number plate, only around the trip.', '<b>Our Control room</b>: verification documents and trip records, only for safety and support.', 'Family you share a trip with see the live trip until it ends. We never sell your information.']))}
+      ${sec('Your rights', li(['Ask to see, correct or delete your information, or object to how it is used, through Help in the app.', 'We keep trip and verification records only as long as needed for safety, disputes and the law, then delete them.', 'You may complain to the Information Regulator of South Africa.']))}
+      <p class="xs muted">Version ${POLICY_V}. Processed under the Protection of Personal Information Act (POPIA).</p>`
+  };
+  return `<div class="wrap page"><div class="page-head"><span class="eyebrow">${ic('file', 'sm')} Rules & policies</span><h2>How Trip To Venda works, and the rules everyone follows</h2><p>Plain language. Please read them before you book or drive.</p></div>
+    <div class="tabbar-wrap">${tabsHTML(tab, T)}</div>
+    <div class="card pad-lg pol">${P[tab] || P.position}</div></div>`;
+};
 V.safety = () => {
   const steps = list => `<div class="steps">${list.map((s, i) => `<div class="step-i"><span class="n">${i + 1}</span><p style="color:var(--ink-2)">${s}</p></div>`).join('')}</div>`;
   return `<div class="wrap page">
@@ -1455,7 +1683,7 @@ V.safety = () => {
     <div class="card pad-lg"><div class="card-title">${ic('user')}<h3>For riders</h3></div>${steps(['Only book and pay for trips listed on Trip To Venda.', "Check the driver's photo, name, car and number plate before you get in.", 'Give your PIN only to the right driver, never send it in chat.', 'Tap “Share trip” so family can follow you live.', "Keep your luggage photo, it's your proof if something goes missing."])}</div>
     <div class="card pad-lg"><div class="card-title">${ic('car')}<h3>For drivers</h3></div>${steps(['Every rider uploads ID and a selfie. Check their face at pickup.', "Ask for the PIN, wrong PIN means wrong person. Don't start.", 'Check luggage photos before accepting. You can decline parcels.', 'Keep licence, PrDP and roadworthy valid, expired documents pause your account.'])}</div>
     <div class="card pad-lg"><div class="card-title">${ic('info')}<h3>Questions</h3></div>
-      ${[['Who sets the price?', 'Drivers. You see the full price, bag fees and parcel prices before you book.'], ['How do I pay?', 'Directly to the driver, cash, EFT or card machine, as shown on the trip.'], ['What is a parcel booking?', 'Send groceries, clothes or goods home without travelling. Add the receiver and a photo.'], ['Can I cancel?', 'Yes, before pickup. Please cancel early so someone else gets the seat.'], ['Are my documents safe?', "Only our safety team sees them. They're never shown to other users (POPIA)."]].map(f => `<div class="review"><b>${f[0]}</b><p class="small muted" style="margin-top:4px">${f[1]}</p></div>`).join('')}</div>
+      ${[['Is Trip To Venda a taxi?', 'No. We are a booking platform for people already travelling long distance who share their empty seats, booked in advance and door to door. No ranks, no touting, no hailing. <a href="#/rules">Read our position</a>.'], ['Who sets the price?', 'Drivers. You see the full price, bag fees and parcel prices before you book.'], ['How do I pay?', 'Directly to the driver, cash, EFT or card machine, as shown on the trip.'], ['What is a parcel booking?', 'Send groceries, clothes or goods home without travelling. Add the receiver and a photo.'], ['Can I cancel?', 'Yes, before pickup. Please cancel early so someone else gets the seat.'], ['Are my documents safe?', "Only our safety team sees them. They're never shown to other users (POPIA)."]].map(f => `<div class="review"><b>${f[0]}</b><p class="small muted" style="margin-top:4px">${f[1]}</p></div>`).join('')}</div>
   </div></div>`;
 };
 
@@ -1554,8 +1782,18 @@ function parse() {
   const [name, ...args] = path.split('/');
   return { name: name || 'home', args, q: Object.fromEntries(new URLSearchParams(qs || '')) };
 }
+/* links from our account emails land here: /?mode=verifyEmail|resetPassword&oobCode=… */
+function actionParams() {
+  const p = new URLSearchParams(location.search);
+  if (!p.get('oobCode') || !p.get('mode')) return null;
+  if (location.hash && location.hash !== '#/' && location.hash !== '#') { history.replaceState(null, '', location.pathname + location.hash); return null; } // moved on
+  return { mode: p.get('mode'), code: p.get('oobCode') };
+}
+const leaveAction = hash => { history.replaceState(null, '', location.pathname + hash); render(); };
 function render() {
-  const { name, args, q } = parse();
+  const act = actionParams();
+  const { name, args, q } = act ? { name: 'authAction', args: [], q: {} } : parse();
+  const pr = name + '/' + args.join('/'); if (pr !== photoRoute) { Object.keys(PHOTOS).forEach(k => delete PHOTOS[k]); photoRoute = pr; if (document.body.classList.contains('cam-open')) camClose(); }
   clearMaps(); afterRender = [];
   const fn = V[name] || V.home;
   if (name !== 'board') clearInterval(boardTimer);
@@ -1599,6 +1837,7 @@ F.editTripForm = f => {
   if (seats < Math.max(1, booked)) return toast(`${booked} seat(s) are already booked, you can't go lower than that`, 'err');
   if (seats > max) return toast(`Your ${vLabel(me.vehicle).toLowerCase()} can take up to ${max} passengers`, 'err');
   if (!(price >= 50 && price <= 3000)) return toast('Price per seat must be between R50 and R3 000', 'err');
+  if (RANK_RE.test(f.pickupArea?.value || '') || RANK_RE.test(f.dropArea?.value || '')) return toast(rankMsg, 'err');
   const before = { date: t.date, time: t.time, price: t.price, seats: t.seats, parcelPrice: t.parcelPrice };
   Object.assign(t, { date: f.date.value, time: f.time.value, arrive: f.arrive.value, seats, price, bagFee: +f.bagFee.value || 0, parcelPrice: +f.parcelPrice.value || 0, pickupArea: f.pickupArea.value.trim(), dropArea: f.dropArea.value.trim(), notes: f.notes.value.trim(), acceptsCash: !!f.acceptsCash.checked });
   const changed = Object.keys(before).filter(k => before[k] !== t[k]);
@@ -1621,7 +1860,7 @@ F.signupForm = async f => {
   if (window.Cloud?.on) {
     if (pw.length < 8 || !/[a-z]/.test(pw) || !/[A-Z]/.test(pw) || !/\d/.test(pw)) return toast('Password needs 8+ characters with upper and lower case letters and a number', 'err');
     const btn = f.querySelector('button[type=submit],button:not([type])'); if (btn) btn.disabled = true;
-    const u = { id: '', role: f.role.value, name: f.name.value.trim(), gender: f.gender.value, phone, email, emergencyName: f.emergencyName.value.trim(), emergencyPhone: f.emergencyPhone.value.replace(/\s/g, ''), status: 'new', pro: false, phoneVerified: false, docs: {}, created: Date.now() };
+    const u = { id: '', role: f.role.value, name: f.name.value.trim(), gender: f.gender.value, phone, email, emergencyName: f.emergencyName.value.trim(), emergencyPhone: f.emergencyPhone.value.replace(/\s/g, ''), status: 'new', pro: false, phoneVerified: false, docs: {}, created: Date.now(), agreed: { v: POLICY_V, at: Date.now() } };
     Cloud.pending = u;
     try { u.id = await Cloud.signup(email, pw); } catch (e) { Cloud.pending = null; if (btn) btn.disabled = false; return toast(Cloud.err(e), 'err'); }
     if (!db.users.some(x => x.id === u.id)) db.users.push(u);
@@ -1637,7 +1876,7 @@ F.signupForm = async f => {
 };
 F.loginForm = async f => {
   if (window.Cloud?.on) {
-    const btn = f.querySelector('button'); if (btn) btn.disabled = true;
+    const btn = f.querySelector('button:not([type=button])'); if (btn) btn.disabled = true;
     try { await Cloud.login(f.login.value.trim().toLowerCase(), f.password.value); }
     catch (e) { if (btn) btn.disabled = false; f.password.value = ''; return toast(Cloud.err(e), 'err'); }
     await Cloud.whenMe();
@@ -1655,6 +1894,7 @@ F.postForm = f => {
   const fp = f.fromProv.value, tp = f.toProv.value;
   if (fp !== VENDA && tp !== VENDA) return toast('Trip To Venda trips must start or end in Venda', 'err');
   if (fp === tp && f.fromTown.value === f.toTown.value) return toast('Pick two different places', 'err');
+  if (RANK_RE.test(f.pickupArea.value) || RANK_RE.test(f.dropArea.value)) return toast(rankMsg, 'err');
   if ((me.wallet?.balance || 0) < 0) return toast('Your wallet is negative, top up first', 'err');
   if (+f.seats.value > (me.vehicle?.seats || 4)) return toast(`Your ${vLabel(me.vehicle).toLowerCase()} can take up to ${me.vehicle?.seats || 4} passengers`, 'err');
   const pick = n => [...f.querySelectorAll(`[name=${n}]:checked`)].map(x => x.value);
@@ -1806,7 +2046,7 @@ document.addEventListener('change', async e => {
     $('#routeInfo span').innerHTML = `About <b>${Math.round(r.km)} km</b> · <b>${fmtDur(r.min)}</b> driving. Suggested price: <b>${R(suggestPrice(r.km) - 30)} to ${R(suggestPrice(r.km) + 40)}</b> per seat.`;
     f.price.value = suggestPrice(r.km);
   }
-  if (el.dataset.preview && el.files[0]) { const img = $('#' + el.dataset.preview); img.src = await readImg(el.files[0], 500); img.classList.remove('hidden'); el.closest('.upload')?.classList.add('done'); }
+  if (el.dataset.photo && el.files[0]) { await usePhotoFile(el.dataset.photo, el.files[0]); el.value = ''; }
   if (el.name === 'type' && f?.id === 'bookForm') f.querySelectorAll('[data-show]').forEach(x => x.classList.toggle('hidden', x.dataset.show !== el.value));
   if (f?.id === 'bookForm') updateTotal(f);
 });
@@ -1973,6 +2213,7 @@ if ('serviceWorker' in navigator && location.protocol.startsWith('http')) naviga
 /* ---------------- Start ---------------- */
 $('#yr').textContent = new Date().getFullYear();
 if (DEMO) { const d = document.createElement('button'); d.id = 'demoBtn'; d.className = 'demo-btn'; d.dataset.act = 'demo'; d.innerHTML = ic('bolt', 'sm') + ' Demo'; document.body.appendChild(d); }
+Object.assign(A, AA_ACTIONS, CAM_ACTIONS);
 (window.Cloud?.on ? Cloud.boot() : load()).then(render);
 
 /* ---------------- Branded loading screen (SPLASH_MS) ---------------- */
