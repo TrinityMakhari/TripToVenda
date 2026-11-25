@@ -34,7 +34,7 @@
   const ACTIVE = ['requested', 'confirmed', 'picked'];
   const PROFILE_KEYS = ['role', 'name', 'status', 'pro', 'created', 'phoneVerified', 'vehicle', 'bio', 'langs', 'photo', 'since', 'pastTrips', 'proRequested', 'rejectReason'];
   const ORDER = ['profiles', 'private', 'contacts', 'docs', 'faces', 'trips', 'bookings', 'messages', 'reviews', 'notes', 'requests', 'alerts', 'topups', 'ledger'];
-  const COLS = [...ORDER, 'pins'];
+  const COLS = [...ORDER, 'pins', 'openRequests', 'completions'];
   const short = u => { const p = (u?.name || '').trim().split(/\s+/); return p.length > 1 ? `${p[0]} ${p[p.length - 1][0]}.` : (p[0] || 'Member'); };
 
   /* ---------------- listeners -> cache ---------------- */
@@ -108,7 +108,7 @@
     db = {
       users, trips, bookings,
       messages: arr('messages').sort(by('at')), reviews: arr('reviews').sort(by('at')), notes: arr('notes').sort(by('at')),
-      requests: arr('requests').sort(by('at')), alerts: arr('alerts').sort(by('at')), topups: arr('topups').sort(by('at')), ledger: arr('ledger').sort(by('at')),
+      requests: arr('requests').sort(by('at')), openRequests: arr('openRequests'), completions: arr('completions'), alerts: arr('alerts').sort(by('at')), topups: arr('topups').sort(by('at')), ledger: arr('ledger').sort(by('at')),
       tour: (typeof db === 'object' && db?.tour) || {}
     };
     me = me0 || null;
@@ -116,6 +116,7 @@
     shadow = toDocs();
     syncTaken();
     attachDynamic();
+    if (me) setTimeout(ensure, 0);
   }
 
   /* ---------------- app data -> documents ---------------- */
@@ -166,18 +167,26 @@
     out.forEach((s, path) => { const old = shadow.get(path); if (s !== old) writes.push([path, JSON.parse(s), old]); });
     writes.sort((a, b) => ORDER.indexOf(a[0].split('/')[0]) - ORDER.indexOf(b[0].split('/')[0]));
     writes.forEach(([p, d, old]) => { shadow.set(p, stable(d)); write(p, d, old); });
+    [...shadow.keys()].filter(p => p.startsWith('requests/') && !out.has(p)).forEach(p => {
+      shadow.delete(p); const id = p.split('/')[1];
+      S.deleteDoc(S.doc(fs, p)).then(() => S.deleteDoc(S.doc(fs, 'openRequests', id))).catch(e => { console.warn('delete', p, e.code); schedule(); });
+    });
     ensure();
     return true;
   };
   const strip0 = o => { const x = { ...o }; delete x.id; return x; };
 
-  /* one-off documents: secret PIN, family tracking pointer, contact sharing */
+  /* one-off documents: secret PIN, family tracking pointer, contact sharing, public counters */
+  function onceWrite(key, path, data) { if (done.has(key)) return; done.add(key); S.setDoc(S.doc(fs, path), data).catch(e => { console.warn('write', path, e.code); }); }
   function ensure() {
-    const myId = Cloud.user?.uid; if (!myId || Cloud.admin) return;
-    const once = (key, path, data) => { if (done.has(key)) return; done.add(key); S.setDoc(S.doc(fs, path), data).catch(e => { done.delete(key); console.warn('write', path, e.code); }); };
+    const myId = Cloud.user?.uid; if (!myId || Cloud.admin || !db) return;
+    // "Riders looking" for visitors: route and date only, never who
+    (db.requests || []).forEach(r => { if (r.riderId === myId && C.requests.has(r.id) && !C.openRequests.has(r.id)) onceWrite('oreq' + r.id, 'openRequests/' + r.id, { fp: r.fp, tp: r.tp, date: r.date || '', seats: r.seats || 1, at: r.at || Date.now() }); });
+    const once = onceWrite;
     db.bookings.forEach(b => {
       if (b.riderId === myId && b.pin && !C.pins.has(b.id)) { pinMemo[b.id] = { pin: b.pin, code: b.deliveryCode || '' }; once('pin' + b.id, 'pins/' + b.id, pinMemo[b.id]); }
       if (b.riderId === myId && b.share?.code) once('trk' + b.share.code, 'tracks/' + b.share.code, { bookingId: b.id });
+      if (b.driverId === myId && b.status === 'completed' && !C.completions.has(b.id)) once('cmp' + b.id, 'completions/' + b.id, { tripId: b.tripId, at: b.doneAt || Date.now() });
       if (!ACTIVE.includes(b.status)) return;
       const t = db.trips.find(x => x.id === b.tripId), dep = t ? new Date(t.date + 'T' + (t.time || '12:00')).getTime() : Date.now();
       const until = Math.min(dep + 2 * 86400000, Date.now() + 29 * 86400000);
@@ -237,6 +246,8 @@
     listen('trips', 'trips', S.collection(fs, 'trips'));
     listen('profiles', 'profiles', S.collection(fs, 'profiles'));
     listen('reviews', 'reviews', S.collection(fs, 'reviews'));
+    listen('openReq', 'openRequests', S.collection(fs, 'openRequests'));
+    listen('cmp', 'completions', S.collection(fs, 'completions'));
   }
   function startPrivate(uid, admin) {
     listen('requests', 'requests', S.collection(fs, 'requests'));
@@ -254,7 +265,7 @@
     listen('topups', 'topups', q('topups', S.where('driverId', '==', uid)));
     listen('ledger', 'ledger', q('ledger', S.where('driverId', '==', uid)));
   }
-  const PUBLIC = ['trips', 'profiles', 'reviews'];
+  const PUBLIC = ['trips', 'profiles', 'reviews', 'openReq', 'cmp'];
 
   let authKnown, authReady = new Promise(r => authKnown = r);
   S.onAuthStateChanged(auth, async u => {

@@ -325,6 +325,8 @@ const POLICY_V = '1.0 · 25 November 2026';
 // pickups and drop offs are door to door: never at taxi ranks, bus terminals or taxi stops
 const RANK_RE = /\b(taxi\s*rank|rank|taxi\s*stop|taxi\s*stand|bus\s*terminus|bus\s*terminal|terminus|park\s*station|bosman\s*station)\b/i;
 const rankMsg = 'Trip To Venda is door to door. Use a home, work or business address, not a taxi rank, taxi stop or bus terminal.';
+// works for visitors too: logged in people see the requests, everyone sees the anonymous counters
+const ridersLooking = () => { const ids = new Set(); [...(db.requests || []), ...(db.openRequests || [])].forEach(r => { if (!r.date || r.date >= today()) ids.add(r.id); }); return ids.size; };
 const VTYPES = { car: { label: 'Private car', max: 4, eg: 'e.g. Toyota Corolla, VW Polo', hint: 'Sedan or hatchback, up to 4 passengers' }, seven: { label: '7 seater', max: 6, eg: 'e.g. Toyota Avanza, Suzuki Ertiga, Toyota Innova', hint: '7 seats including the driver, up to 6 passengers' } };
 const vType = v => VTYPES[v?.type] ? v.type : ((v?.seats || 4) > 4 ? 'seven' : 'car');
 const vLabel = v => VTYPES[vType(v)].label;
@@ -554,10 +556,11 @@ const step = (s, i) => `<div class="step-i"><span class="n">${i + 1}</span><div>
 V.home = () => {
   const up = db.trips.filter(t => t.status === 'open' && t.date >= today()).sort((a, b) => (a.date + a.time).localeCompare(b.date + b.time));
   const drivers = db.users.filter(u => u.role === 'driver' && u.status === 'verified');
-  const ROUTES = [[VENDA, 'Thohoyandou', 'Gauteng', 'Johannesburg CBD'], ['Gauteng', 'Pretoria CBD', VENDA, 'Sibasa'], [VENDA, 'Musina', 'Gauteng', 'Midrand'], [VENDA, 'Malamulele', 'Gauteng', 'Soweto'], ['Gauteng', 'Johannesburg CBD', VENDA, 'Makhado (Louis Trichardt)'], [VENDA, 'Thohoyandou', 'Limpopo (other)', 'Polokwane'], [VENDA, 'Thohoyandou', 'KwaZulu Natal', 'Durban'], [VENDA, 'Sibasa', 'Western Cape', 'Cape Town']];
+  // [from province, from town, to province, to town, starting price shown on the tile]
+  const ROUTES = [[VENDA, 'Thohoyandou', 'Gauteng', 'Johannesburg CBD', 450], ['Gauteng', 'Pretoria CBD', VENDA, 'Sibasa', 450], [VENDA, 'Musina', 'Gauteng', 'Midrand', 450], [VENDA, 'Malamulele', 'Gauteng', 'Soweto', 450], ['Gauteng', 'Johannesburg CBD', VENDA, 'Makhado (Louis Trichardt)', 400], [VENDA, 'Thohoyandou', 'Limpopo (other)', 'Polokwane', 150], [VENDA, 'Thohoyandou', 'KwaZulu Natal', 'Durban', 900], [VENDA, 'Sibasa', 'Western Cape', 'Cape Town', 1800]];
   const role = me?.role, nm = me ? esc(first(me.name)) : '', female = me?.gender === 'Female';
   const heroCls = role === 'driver' ? 'hero-driver' : role === 'rider' ? (female ? 'hero-rider-f' : 'hero-rider-m') : '';
-  const looking = (db.requests || []).filter(r => !r.date || r.date >= today()).length;
+  const looking = ridersLooking();
   const week = up.filter(t => t.date <= addDays(7)).length, weekTxt = week ? `${week} trip${week === 1 ? '' : 's'} leaving this week` : 'New trips are posted daily';
   const rv = db.reviews.filter(r => user(r.to)?.role === 'driver'), avg = rv.length ? (rv.reduce((a, r) => a + r.stars, 0) / rv.length).toFixed(1) : null;
   const heroTxt = role === 'driver' ? `
@@ -591,9 +594,9 @@ V.home = () => {
 
   <div class="wrap stats-bar"><div class="stats-in">
     <div><b>${up.length}</b><span>Upcoming trips</span></div>
-    <div><b>${new Set(db.bookings.filter(b => b.status === 'completed').map(b => b.tripId)).size}</b><span>Trips completed</span></div>
+    <div><b>${new Set([...db.bookings.filter(b => b.status === 'completed').map(b => b.tripId), ...(db.completions || []).map(c => c.tripId)]).size}</b><span>Trips completed</span></div>
     <div><b>${drivers.length}</b><span>Verified drivers</span></div>
-    <div><b>${(db.requests || []).filter(r => !r.date || r.date >= today()).length}</b><span>Riders looking</span></div>
+    <div><b>${ridersLooking()}</b><span>Riders looking</span></div>
   </div></div>
 
   <section class="section wrap">
@@ -603,7 +606,7 @@ V.home = () => {
 
   <section class="wrap" style="padding-bottom:20px">
     <div class="sec-head"><div><span class="eyebrow">${ic('route', 'sm')} Popular routes</span><h2>Where Venda travels</h2></div></div>
-    <div class="routes">${ROUTES.map(r => { const rt = routeSync(coord(r[0], r[1]), coord(r[2], r[3])); return `<a class="route-tile photo" href="#/search?fp=${encodeURIComponent(r[0])}&ft=${encodeURIComponent(r[1])}&tp=${encodeURIComponent(r[2])}&tt=${encodeURIComponent(r[3])}"><img src="${placePhoto(r[2], r[3], true)}" alt="" loading="lazy" decoding="async"><span class="rt-body"><b>${esc(short(r[1]))} → ${esc(short(r[3]))}</b><small>${ic('route', 'sm')} ${Math.round(rt.km)} km · ${fmtDur(rt.min)}</small></span><span class="from"><small>from</small>${R(suggestPrice(rt.km) - 30)}</span></a>`; }).join('')}</div>
+    <div class="routes">${ROUTES.map(r => { const rt = routeSync(coord(r[0], r[1]), coord(r[2], r[3])); return `<a class="route-tile photo" href="#/search?fp=${encodeURIComponent(r[0])}&ft=${encodeURIComponent(r[1])}&tp=${encodeURIComponent(r[2])}&tt=${encodeURIComponent(r[3])}"><img src="${placePhoto(r[2], r[3], true)}" alt="" loading="lazy" decoding="async"><span class="rt-body"><b>${esc(short(r[1]))} → ${esc(short(r[3]))}</b><small>${ic('route', 'sm')} ${Math.round(rt.km)} km · ${fmtDur(rt.min)}</small></span><span class="from"><small>from</small>${R(r[4] || suggestPrice(rt.km) - 30)}</span></a>`; }).join('')}</div>
   </section>
 
   <section class="story">
@@ -2252,13 +2255,43 @@ document.addEventListener('mousemove', e => { const t = e.target.closest?.('[dat
 /* ---------------- Install as app (PWA) ---------------- */
 let deferredInstall = null;
 window.addEventListener('beforeinstallprompt', e => { e.preventDefault(); deferredInstall = e; updateNav(parse().name); });
-if ('serviceWorker' in navigator && location.protocol.startsWith('http')) navigator.serviceWorker.register('sw.js').catch(() => {});
+/* ---------------- Always the newest version ---------------- */
+// The service worker checks for a new version on every start, when the app comes back to the screen, and every 30 min.
+// When a new version takes over: reload at once if the person is not busy, otherwise offer a "Refresh" bar.
+if ('serviceWorker' in navigator && location.protocol.startsWith('http')) {
+  const hadController = !!navigator.serviceWorker.controller; let reloading = false;
+  navigator.serviceWorker.register('sw.js').then(reg => {
+    const check = () => reg.update().catch(() => { });
+    check(); setInterval(check, 30 * 60 * 1000);
+    document.addEventListener('visibilitychange', () => { if (!document.hidden) check(); });
+  }).catch(() => { });
+  const busy = () => document.body.classList.contains('cam-open') || !$('#modal')?.classList.contains('hidden') || (document.activeElement && /INPUT|TEXTAREA|SELECT/.test(document.activeElement.tagName));
+  navigator.serviceWorker.addEventListener('controllerchange', () => {
+    if (!hadController || reloading) return; // very first visit: nothing old to replace
+    if (document.getElementById('splash') || !busy()) { reloading = true; location.reload(); return; }
+    if (document.getElementById('updBar')) return;
+    const b = document.createElement('div'); b.id = 'updBar'; b.className = 'upd-bar';
+    b.innerHTML = `${ic('bolt', 'sm')}<span>A new version of Trip To Venda is ready.</span><button class="btn btn-sm btn-accent" onclick="location.reload()">Refresh</button>`;
+    document.body.appendChild(b);
+  });
+}
+
+/* ---------------- Every new start opens on Home ---------------- */
+// A fresh start (new tab, app icon, browser reopened) always opens Home. Links that are meant to be shared
+// (family tracking, a trip, the rules) and email links still open where they point. Refreshing keeps your page.
+(function startOnHome() {
+  let started = false; try { started = sessionStorage.getItem('ttv_started') === '1'; sessionStorage.setItem('ttv_started', '1'); } catch { }
+  if (started || new URLSearchParams(location.search).get('oobCode')) return;
+  if (!/^#\/(track|trip|rules)(\/|\?|$)/.test(location.hash)) history.replaceState(null, '', location.pathname + location.search + '#/');
+})();
 
 /* ---------------- Start ---------------- */
 $('#yr').textContent = new Date().getFullYear();
 if (DEMO) { const d = document.createElement('button'); d.id = 'demoBtn'; d.className = 'demo-btn'; d.dataset.act = 'demo'; d.innerHTML = ic('bolt', 'sm') + ' Demo'; document.body.appendChild(d); }
 Object.assign(A, AA_ACTIONS, CAM_ACTIONS, GOOGLE_ACTIONS);
-(window.Cloud?.on ? Cloud.boot() : load()).then(render);
+// the loading screen stays until the live data has arrived (at least SPLASH_MS, at most 12 s)
+let appReady; const READY = new Promise(r => appReady = r);
+(window.Cloud?.on ? Cloud.boot() : load()).then(render).catch(e => { console.error(e); try { render(); } catch { } }).finally(() => appReady());
 
 /* ---------------- Branded loading screen (SPLASH_MS) ---------------- */
 (function splash() {
@@ -2268,5 +2301,6 @@ Object.assign(A, AA_ACTIONS, CAM_ACTIONS, GOOGLE_ACTIONS);
   let i = Math.min(msgs.length - 1, Math.floor(performance.now() / (SPLASH_MS / msgs.length)));
   if (m) m.textContent = msgs[i];
   const iv = setInterval(() => { i = Math.min(i + 1, msgs.length - 1); if (m) m.textContent = msgs[i]; }, SPLASH_MS / msgs.length);
-  setTimeout(() => { clearInterval(iv); s.classList.add('out'); setTimeout(() => s.remove(), 650); }, left);
+  const done = () => { clearInterval(iv); s.classList.add('out'); setTimeout(() => s.remove(), 650); };
+  Promise.all([new Promise(r => setTimeout(r, left)), Promise.race([READY, new Promise(r => setTimeout(r, 12000))])]).then(done);
 })();
