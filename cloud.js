@@ -53,7 +53,7 @@
       src.map = new Map();
       if (isDoc) { if (snap.exists()) src.map.set(snap.id, snap.data()); }
       else snap.forEach(d => src.map.set(d.id, d.data()));
-      src.ready = true; schedule();
+      src.ready = true; Cloud.lastData = Date.now(); schedule();
     }, err => {
       // not allowed (yet): e.g. a contact card before the other person shares it
       if (err.code !== 'permission-denied') console.warn('listen', key, err.code);
@@ -278,6 +278,15 @@
     }
     schedule(); authKnown();
   });
+
+  /* Control room "Refresh": reconnect every live feed and wait for fresh data from the server */
+  Cloud.refresh = async () => {
+    const u = Cloud.user; stop(() => true);
+    startPublic(); if (u) startPrivate(u.uid, Cloud.admin);
+    const t0 = Date.now();
+    await new Promise((res, rej) => { (function w() { const all = Object.values(sources); if (all.length && all.every(s => s.ready)) return res(); if (Date.now() - t0 > 15000) return rej(new Error('timeout')); setTimeout(w, 150); })(); });
+    build();
+  };
 
   /* family tracking page: no account needed, only the shared trip is readable */
   Cloud.loadTrack = async code => {

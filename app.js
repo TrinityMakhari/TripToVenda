@@ -253,6 +253,13 @@ function camShoot() {
   $('#camTip').innerHTML = q.ok ? `<span class="okc">${ic('check', 'sm')} Looks good. Check the details are readable, then use it.</span>` : `<span class="warnc">${ic('alert', 'sm')} ${esc(q.issues.join(' · '))}</span>`;
 }
 function camClose() { Cam.stop(); const l = $('#camLayer'); if (l) { l.classList.add('hidden'); l.innerHTML = ''; } document.body.classList.remove('cam-open'); }
+const CTRL_ACTIONS = {
+  ctrlRefresh: async el => {
+    el.disabled = true; el.classList.add('spin');
+    try { if (window.Cloud?.on) await Cloud.refresh(); else await load(); navigator.serviceWorker?.getRegistration().then(r => r?.update()).catch(() => { }); render(); toast('Up to date ✔'); }
+    catch { toast('Could not refresh. Check your internet connection.', 'err'); el.disabled = false; el.classList.remove('spin'); }
+  }
+};
 const GOOGLE_ACTIONS = {
   googleIn: async el => {
     const role = document.querySelector('#signupForm [name=role]:checked')?.value; if (role) sessionStorage.setItem('ttv_role', role);
@@ -1462,7 +1469,7 @@ V.admin = q => {
   }
   return `<div class="wrap page">
     <div class="dash-head"><div><span class="eyebrow">${ic('shield', 'sm')} Trip To Venda team</span><h2 style="margin:0">Control room</h2><p class="muted small">Every trip, who took it, where to, the money and safety, in one place.</p></div></div>
-    ${tabs}${body}</div>`;
+    <div class="ctrl-bar">${tabs}<div class="ctrl-ref"><span class="xs muted" id="ctrlAt">${window.Cloud?.on ? 'Live · ' + new Date(Cloud.lastData || Date.now()).toLocaleTimeString('en-ZA', { hour: '2-digit', minute: '2-digit' }) : ''}</span><button class="btn btn-ghost" data-act="ctrlRefresh" title="Reload everything from the server">${ic('flip', 'sm')} Refresh</button></div></div>${body}</div>`;
 };
 function mountRouteVolume(routes) {
   const m = baseMap('volMap', { scrollWheelZoom: false }); if (!m) return;
@@ -2288,7 +2295,7 @@ if ('serviceWorker' in navigator && location.protocol.startsWith('http')) {
 /* ---------------- Start ---------------- */
 $('#yr').textContent = new Date().getFullYear();
 if (DEMO) { const d = document.createElement('button'); d.id = 'demoBtn'; d.className = 'demo-btn'; d.dataset.act = 'demo'; d.innerHTML = ic('bolt', 'sm') + ' Demo'; document.body.appendChild(d); }
-Object.assign(A, AA_ACTIONS, CAM_ACTIONS, GOOGLE_ACTIONS);
+Object.assign(A, AA_ACTIONS, CAM_ACTIONS, GOOGLE_ACTIONS, CTRL_ACTIONS);
 // the loading screen stays until the live data has arrived (at least SPLASH_MS, at most 12 s)
 let appReady; const READY = new Promise(r => appReady = r);
 (window.Cloud?.on ? Cloud.boot() : load()).then(render).catch(e => { console.error(e); try { render(); } catch { } }).finally(() => appReady());
