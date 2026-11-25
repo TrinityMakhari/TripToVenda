@@ -732,3 +732,16 @@ body.cam-open .toast{z-index:2100}
 .decl{background:#fafcfb;border:1px solid var(--line);border-radius:16px;padding:16px;margin:8px 0 16px}
 .decl .check{display:flex;gap:10px;align-items:flex-start;margin-bottom:10px;line-height:1.5}
 .decl .check input{margin-top:3px;flex:none}
+
+/* ---- Continue with Google ---- */
+.btn-google{background:#fff;color:#1f1f1f;border:1px solid #dadce0;font-weight:700;gap:12px}
+.btn-google:hover{background:#f7f8f8;border-color:#c6c9cc}
+.btn-google .g-logo{width:20px;height:20px;flex:none}
+.btn-google:disabled{opacity:.7}
+.or-line{display:flex;align-items:center;gap:12px;margin:18px 0;color:var(--muted);font-size:.82rem}
+.or-line::before,.or-line::after{content:"";flex:1;height:1px;background:var(--line)}
+/* sign up / log in pages: never wider than the phone */
+.auth{grid-template-columns:minmax(0,1fr)}
+@media(min-width:960px){.auth{grid-template-columns:minmax(0,1fr) minmax(0,1fr)}}
+.auth-main,.auth-main form,.auth-main .grid>*{min-width:0}
+.auth-main .check{overflow-wrap:anywhere}

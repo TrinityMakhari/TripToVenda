@@ -253,6 +253,21 @@ function camShoot() {
   $('#camTip').innerHTML = q.ok ? `<span class="okc">${ic('check', 'sm')} Looks good. Check the details are readable, then use it.</span>` : `<span class="warnc">${ic('alert', 'sm')} ${esc(q.issues.join(' · '))}</span>`;
 }
 function camClose() { Cam.stop(); const l = $('#camLayer'); if (l) { l.classList.add('hidden'); l.innerHTML = ''; } document.body.classList.remove('cam-open'); }
+const GOOGLE_ACTIONS = {
+  googleIn: async el => {
+    const role = document.querySelector('#signupForm [name=role]:checked')?.value; if (role) sessionStorage.setItem('ttv_role', role);
+    el.disabled = true; const txt = el.querySelector('span').textContent; el.querySelector('span').textContent = 'Opening Google…';
+    try {
+      const r = await Cloud.google();
+      if (r !== 'ok') { el.disabled = false; el.querySelector('span').textContent = txt; return; }
+      el.querySelector('span').textContent = 'Signing you in…';
+      const t0 = Date.now(); while (!me && !Cloud.needsProfile && !Cloud.admin && Date.now() - t0 < 8000) await new Promise(r => setTimeout(r, 150));
+      if (Cloud.needsProfile) return go('#/complete');
+      if (me) { toast('Welcome, ' + first(me.name)); return go(document.querySelector('#loginForm')?.dataset.next || (me.role === 'admin' ? '#/admin' : '#/dashboard')); }
+      el.disabled = false; el.querySelector('span').textContent = txt; toast('Signed in, but your account could not load. Try again.', 'err');
+    } catch (e) { el.disabled = false; el.querySelector('span').textContent = txt; toast(Cloud.err(e), 'err'); }
+  }
+};
 const CAM_ACTIONS = {
   camOpen: el => camOpen(el.dataset.name, el.dataset.title || 'Take a photo'),
   camClose, camShoot, camRetake: () => camStart(),
@@ -815,6 +830,8 @@ function showStep(f, s) {
   if (f.getBoundingClientRect().top < 60) f.scrollIntoView({ behavior: 'smooth', block: 'start' });
 }
 
+const G_LOGO = '<svg class="g-logo" viewBox="0 0 48 48" aria-hidden="true"><path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z"/><path fill="#4285F4" d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z"/><path fill="#FBBC05" d="M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z"/><path fill="#34A853" d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.15 1.45-4.92 2.3-8.16 2.3-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z"/></svg>';
+const googleBtn = (label = 'Continue with Google') => window.Cloud?.on ? `<button type="button" class="btn btn-block btn-lg btn-google" data-act="googleIn">${G_LOGO}<span>${label}</span></button><div class="or-line"><span>or use your email</span></div>` : '';
 function authShell(title, sub, form) {
   return `<div class="auth"><div class="auth-side" style="--img:url(${PHOTO.traveller})"><span class="eyebrow" style="color:var(--accent)">${ic('shield', 'sm')} Verified community</span><h2>Every rider and driver is ID checked.</h2><p>Your documents are only seen by the Trip To Venda safety team and are protected under POPIA.</p>
   <div class="faces" style="margin-top:26px">${db.users.filter(u => u.role === 'driver').slice(0, 5).map(d => avatar(d)).join('')}</div></div>
@@ -823,7 +840,7 @@ function authShell(title, sub, form) {
 V.signup = q => {
   if (me) return V.dashboard({});
   const role = q.role === 'driver' ? 'driver' : 'rider';
-  return authShell('Create your account', 'One account for the website and the app.', `<form id="signupForm" data-next="${esc(q.next || '')}"><!--head-->
+  return authShell('Create your account', 'One account for the website and the app.', `<form id="signupForm" data-next="${esc(q.next || '')}"><!--head-->${googleBtn('Sign up with Google')}
     <div class="seg"><label><input type="radio" name="role" value="rider" ${role === 'rider' ? 'checked' : ''}>${ic('user', 'sm')} I need lifts</label><label><input type="radio" name="role" value="driver" ${role === 'driver' ? 'checked' : ''}>${ic('car', 'sm')} I'm a driver</label></div>
     <div class="field"><label>Full name (as on your ID)</label><input name="name" required autocomplete="name"></div>
     <div class="grid g2"><div class="field"><label>Cellphone</label><input name="phone" type="tel" required placeholder="e.g. 071 234 5678" autocomplete="tel"></div><div class="field"><label>Gender</label><select name="gender" required><option value="">Select</option><option>Female</option><option>Male</option><option>Prefer not to say</option></select></div></div>
@@ -835,7 +852,20 @@ V.signup = q => {
     <p class="small muted" style="text-align:center;margin-top:14px">Already have an account? <a href="#/login" class="b">Log in</a></p>
   </form>`);
 };
-V.login = q => authShell('Welcome back', 'Log in to book, track and manage your trips.', `<form id="loginForm" data-next="${esc(q.next || '')}"><!--head-->
+V.complete = () => {
+  const g = window.Cloud?.googleUser?.() || {}, role = sessionStorage.getItem('ttv_role') || 'rider';
+  return authShell('Finish your account', 'A few details so riders and drivers can trust each other. You only do this once.', `<form id="completeForm"><!--head-->
+    <div class="note" style="margin-bottom:16px">${g.photo ? `<img src="${esc(g.photo)}" alt="" style="width:34px;height:34px;border-radius:50%">` : ic('user')}<span class="small">Signed in as <b>${esc(g.email || '')}</b></span></div>
+    <div class="seg"><label><input type="radio" name="role" value="rider" ${role === 'rider' ? 'checked' : ''}>${ic('user', 'sm')} I need lifts</label><label><input type="radio" name="role" value="driver" ${role === 'driver' ? 'checked' : ''}>${ic('car', 'sm')} I'm a driver</label></div>
+    <div class="field"><label>Full name (as on your ID)</label><input name="name" required autocomplete="name" value="${esc(g.name || '')}"></div>
+    <div class="grid g2"><div class="field"><label>Cellphone</label><input name="phone" type="tel" required placeholder="e.g. 071 234 5678" autocomplete="tel"></div><div class="field"><label>Gender</label><select name="gender" required><option value="">Select</option><option>Female</option><option>Male</option></select></div></div>
+    <div class="card" style="background:#fafcfb;margin-bottom:14px"><div class="card-title">${ic('alert', 'sm')}<b class="small">Emergency contact</b></div><div class="grid g2"><div class="field" style="margin:0"><label>Name</label><input name="emergencyName" required></div><div class="field" style="margin:0"><label>Cellphone</label><input name="emergencyPhone" type="tel" required></div></div></div>
+    <label class="check"><input type="checkbox" name="agree" required> I agree to the <a href="#/rules?tab=terms" target="_blank">Terms of use</a>, <a href="#/rules?tab=community" target="_blank">Community rules</a> and <a href="#/rules?tab=privacy" target="_blank">Privacy policy</a>, and consent to my ID being checked for everyone's safety (POPIA).</label><br>
+    <button class="btn btn-block btn-lg">Finish and continue</button>
+    <p class="small muted" style="text-align:center;margin-top:14px">Wrong account? <a href="#" data-act="logout" class="b">Use a different one</a></p>
+  </form>`);
+};
+V.login = q => authShell('Welcome back', 'Log in to book, track and manage your trips.', `<form id="loginForm" data-next="${esc(q.next || '')}"><!--head-->${googleBtn()}
     <div class="field"><label>${window.Cloud?.on ? 'Email' : 'Email or cellphone'}</label><input name="login" ${window.Cloud?.on ? 'type="email"' : ''} required autocomplete="username"></div>
     <div class="field"><label>Password</label>${pwField('name="password" required autocomplete="current-password"')}</div>
     <button class="btn btn-block btn-lg">Log in</button>
@@ -1792,7 +1822,8 @@ function actionParams() {
 const leaveAction = hash => { history.replaceState(null, '', location.pathname + hash); render(); };
 function render() {
   const act = actionParams();
-  const { name, args, q } = act ? { name: 'authAction', args: [], q: {} } : parse();
+  let { name, args, q } = act ? { name: 'authAction', args: [], q: {} } : parse();
+  if (window.Cloud?.needsProfile && !['complete', 'rules', 'authAction', 'track'].includes(name)) { name = 'complete'; args = []; }
   const pr = name + '/' + args.join('/'); if (pr !== photoRoute) { Object.keys(PHOTOS).forEach(k => delete PHOTOS[k]); photoRoute = pr; if (document.body.classList.contains('cam-open')) camClose(); }
   clearMaps(); afterRender = [];
   const fn = V[name] || V.home;
@@ -1852,6 +1883,19 @@ F.forgotForm = async f => {
   closeModal(); toast(TEST_MODE ? 'Test mode: reset links are sent once SMS is connected' : 'Reset link sent ✔');
 };
 F.searchForm = f => { go((f.mode?.value === 'parcel' ? '#/parcel?' : '#/search?') + new URLSearchParams(Object.fromEntries(Object.entries({ fp: f.fromProv.value, ft: f.fromTown.value, tp: f.toProv.value, tt: f.toTown.value, date: f.date.value, seats: f.seats.value }).filter(([, v]) => v)))); };
+F.completeForm = async f => {
+  const g = Cloud.googleUser(); if (!g) return go('#/login');
+  const phone = f.phone.value.replace(/\s/g, '');
+  if (f.name.value.trim().split(/\s+/).length < 2) return toast('Please enter your name and surname as on your ID', 'err');
+  if (!isSAphone(phone)) return toast('Enter a valid SA cellphone number', 'err');
+  if (!isSAphone(f.emergencyPhone.value)) return toast('Enter a valid emergency contact number', 'err');
+  const u = { id: g.uid, role: f.role.value, name: f.name.value.trim(), gender: f.gender.value, phone, email: g.email.toLowerCase(), emergencyName: f.emergencyName.value.trim(), emergencyPhone: f.emergencyPhone.value.replace(/\s/g, ''), status: 'new', pro: false, phoneVerified: Cloud.emailVerified(), docs: {}, created: Date.now(), agreed: { v: POLICY_V, at: Date.now() }, signIn: g.google ? 'google' : 'email' };
+  Cloud.pending = u; Cloud.needsProfile = false; sessionStorage.removeItem('ttv_role');
+  if (!db.users.some(x => x.id === u.id)) db.users.push(u);
+  me = db.users.find(x => x.id === u.id);
+  notify(u.id, `Welcome to Trip To Venda, ${first(u.name)}! Next, add your documents so we can verify you.`, '#/verify');
+  save(); toast('Account ready 🎉'); go('#/verify');
+};
 F.signupForm = async f => {
   const email = f.email.value.trim().toLowerCase(), phone = f.phone.value.replace(/\s/g, '');
   if (!isSAphone(phone)) return toast('Enter a valid SA cellphone number', 'err');
@@ -2213,7 +2257,7 @@ if ('serviceWorker' in navigator && location.protocol.startsWith('http')) naviga
 /* ---------------- Start ---------------- */
 $('#yr').textContent = new Date().getFullYear();
 if (DEMO) { const d = document.createElement('button'); d.id = 'demoBtn'; d.className = 'demo-btn'; d.dataset.act = 'demo'; d.innerHTML = ic('bolt', 'sm') + ' Demo'; document.body.appendChild(d); }
-Object.assign(A, AA_ACTIONS, CAM_ACTIONS);
+Object.assign(A, AA_ACTIONS, CAM_ACTIONS, GOOGLE_ACTIONS);
 (window.Cloud?.on ? Cloud.boot() : load()).then(render);
 
 /* ---------------- Branded loading screen (SPLASH_MS) ---------------- */

@@ -112,6 +112,7 @@
       tour: (typeof db === 'object' && db?.tour) || {}
     };
     me = me0 || null;
+    Cloud.needsProfile = !!uidMe && !Cloud.admin && !me && !!sources.me_private?.ready && !!sources.profiles?.ready && !C.profiles.has(uidMe);
     shadow = toDocs();
     syncTaken();
     attachDynamic();
@@ -323,6 +324,18 @@
     }
   };
   Cloud.logout = () => S.signOut(auth);
+  /* Continue with Google: pop up on phones and computers; full page redirect if the pop up is blocked (e.g. installed app) */
+  const google = () => { const p = new S.GoogleAuthProvider(); p.setCustomParameters({ prompt: 'select_account' }); return p; };
+  Cloud.google = async () => {
+    try { await S.signInWithPopup(auth, google()); return 'ok'; }
+    catch (e) {
+      if (['auth/popup-blocked', 'auth/operation-not-supported-in-this-environment'].includes(e.code)) { await S.signInWithRedirect(auth, google()); return 'redirect'; }
+      if (['auth/popup-closed-by-user', 'auth/cancelled-popup-request', 'auth/user-cancelled'].includes(e.code)) return 'cancelled';
+      throw e;
+    }
+  };
+  S.getRedirectResult(auth).catch(e => { if (e?.code && !['auth/no-auth-event'].includes(e.code)) setTimeout(() => toast(Cloud.err(e), 'err'), 1500); });
+  Cloud.googleUser = () => { const u = auth.currentUser; return u ? { uid: u.uid, name: u.displayName || '', email: u.email || '', photo: u.photoURL || '', google: u.providerData.some(p => p.providerId === 'google.com') } : null; };
   /* branded emails (logo + button) through our Netlify function; Firebase's plain email if it isn't set up */
   const back = { url: location.origin + '/' };
   async function mailApi(body, token) {
@@ -356,6 +369,10 @@
     'auth/invalid-email': 'Enter a valid email address', 'auth/network-request-failed': 'No internet connection',
     'ttv/wait': `Email already sent. Check your inbox and spam folder, or try again in ${e?.wait || 1} min.`,
     'auth/expired-action-code': 'This link has expired. Ask for a new one.', 'auth/invalid-action-code': 'This link was already used or is no longer valid. Ask for a new one.',
+    'auth/account-exists-with-different-credential': 'That email already has a Trip To Venda account. Log in with your email and password.',
+    'auth/unauthorized-domain': 'Google sign in is not allowed on this web address yet (Firebase → Authentication → Settings → Authorized domains).',
+    'auth/operation-not-allowed': 'Google sign in is not switched on yet. Use email and password for now.',
+    'auth/popup-blocked': 'Your browser blocked the Google window. Allow pop ups and try again.',
     'auth/user-disabled': 'This account has been switched off. Contact Trip To Venda.'
   }[e?.code] || 'Something went wrong, please try again') + (e?.left > 0 && e.left < MAX_TRIES ? ` · ${e.left} ${e.left === 1 ? 'try' : 'tries'} left` : '');
 
