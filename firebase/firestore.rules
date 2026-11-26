@@ -1,0 +1,330 @@
+rules_version = '2';
+
+// ============================================================================
+// Trip To Venda · Firestore security rules
+// These run on Google's servers. A changed or copied app cannot get around them.
+//   - Nobody can read or write anything that is not listed below.
+//   - ID documents, licences and selfies: only the owner and the Control room.
+//   - Phone numbers and plates: only the owner, the Control room, and the other
+//     person on an active booking (POPIA "need to know").
+//   - Only the Control room can verify people, set Pro, mark payouts and add money.
+//   - Prices and fees on a booking are checked against the trip here.
+//   - The pickup PIN is never readable by the driver; it is checked here, max 5 tries.
+// Control room accounts = documents in /admins/{uid}, created by hand in the Firebase console.
+// ============================================================================
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ---------- helpers ----------
+    function signedIn() { return request.auth != null; }
+    function uid() { return request.auth.uid; }
+    function emailOk() { return signedIn() && request.auth.token.email_verified == true; }
+    function isAdmin() { return signedIn() && exists(/databases/$(database)/documents/admins/$(uid())); }
+    function prof(u) { return get(/databases/$(database)/documents/profiles/$(u)).data; }
+    function priv(u) { return get(/databases/$(database)/documents/private/$(u)).data; }
+    function hasProfile(u) { return exists(/databases/$(database)/documents/profiles/$(u)); }
+    function changed() { return request.resource.data.diff(resource.data).affectedKeys(); }
+    function onlyChanged(keys) { return changed().hasOnly(keys); }
+    // a driver's second car: same limits as the first, and only the Control room can approve it (ok == true)
+    function okCar(v) { return v.type in ['car', 'seven'] && ((v.type == 'car' && v.seats <= 4) || (v.type == 'seven' && v.seats <= 6)); }
+    function car2Ok(u) { return prof(u).get('vehicle2', {}).get('ok', false) == true; }
+    // seats allowed on a trip, for the car the driver picked
+    function carSeats(d) { return d.get('car', 1) == 2 ? prof(uid()).vehicle2.seats : prof(uid()).vehicle.seats; }
+    function carPicked(d) { return d.get('car', 1) == 1 || (d.get('car', 1) == 2 && car2Ok(uid())); }
+    function linked(viewer, subject) {
+      let p = /databases/$(database)/documents/links/$(viewer + '_' + subject);
+      return exists(p) && get(p).data.until > request.time.toMillis();
+    }
+    function isStr(v, max) { return v is string && v.size() <= max; }
+    function nowMs() { return request.time.toMillis(); }
+
+    // ---------- Control room list (read own entry only; created in the console) ----------
+    match /admins/{u} {
+      allow get: if signedIn() && uid() == u;
+      allow list, write: if false;
+    }
+
+    // ---------- public profile (no phone, no email, no ID, no plate) ----------
+    match /profiles/{u} {
+      allow read: if true;
+      allow create: if signedIn() && uid() == u
+        && request.resource.data.role in ['rider', 'driver']
+        && request.resource.data.status == 'new'
+        && request.resource.data.pro == false
+        && isStr(request.resource.data.name, 60)
+        && request.resource.data.keys().hasOnly(['role', 'name', 'status', 'pro', 'created', 'phoneVerified', 'vehicle', 'vehicle2', 'bio', 'langs', 'photo', 'since', 'pastTrips', 'proRequested', 'rejectReason']);
+      allow update: if isAdmin()
+        || (signedIn() && uid() == u && resource.data.status != 'deleted'
+            && onlyChanged(['name', 'vehicle', 'vehicle2', 'bio', 'langs', 'photo', 'status', 'phoneVerified', 'proRequested', 'rejectReason'])
+            // a person can only send themselves for review, never approve themselves
+            && (!('status' in changed()) || request.resource.data.status == 'pending')
+            // changing the car of a verified driver sends them back for review
+            && (!('vehicle' in changed()) || request.resource.data.status == 'pending')
+            && (!('vehicle' in changed()) || request.resource.data.vehicle.type in ['car', 'seven'])
+            && (!('vehicle' in changed()) || (request.resource.data.vehicle.type == 'car' && request.resource.data.vehicle.seats <= 4) || (request.resource.data.vehicle.type == 'seven' && request.resource.data.vehicle.seats <= 6))
+            // second car: the driver can add, change or remove it, but it always waits for the Control room again
+            && (!('vehicle2' in changed()) || !('vehicle2' in request.resource.data) || (request.resource.data.vehicle2.ok == false && okCar(request.resource.data.vehicle2)))
+            && (!('photo' in changed()) || request.resource.data.photo.size() < 60000)
+            && (!('proRequested' in changed()) || request.resource.data.proRequested is bool));
+      allow delete: if false;
+    }
+
+    // ---------- private details: owner + Control room only ----------
+    match /private/{u} {
+      allow read: if (signedIn() && uid() == u) || isAdmin();
+      allow create: if signedIn() && uid() == u && isStr(request.resource.data.email, 120);
+      allow update: if isAdmin() || (signedIn() && uid() == u && !('email' in changed()));
+      allow delete: if isAdmin(); // account deletion on request
+    }
+
+    // ---------- contact card: full name, phone, plate ----------
+    match /contacts/{u} {
+      allow read: if (signedIn() && uid() == u) || isAdmin() || (signedIn() && linked(uid(), u));
+      allow create: if signedIn() && uid() == u && isStr(request.resource.data.phone, 20) && isStr(request.resource.data.name, 80);
+      // number plates can't be swapped after approval: car 1 only while not verified, car 2 only while not approved
+      allow update: if isAdmin() || (signedIn() && uid() == u && isStr(request.resource.data.phone, 20) && isStr(request.resource.data.name, 80)
+        && (!('reg' in changed()) || prof(u).status != 'verified')
+        && (!('reg2' in changed()) || !('reg2' in request.resource.data) || !car2Ok(u)));
+      allow delete: if isAdmin(); // account deletion on request
+    }
+
+    // ---------- ID, licence, PrDP, disc, car photos ----------
+    match /docs/{u} {
+      allow read: if (signedIn() && uid() == u) || isAdmin();
+      // once approved, documents are locked; to change them the person is sent back for review
+      allow create, update: if signedIn() && uid() == u && (!hasProfile(u) || prof(u).status != 'verified');
+      allow delete: if isAdmin(); // account deletion on request
+    }
+
+    // ---------- second car documents (disc + car photo): owner + Control room only ----------
+    // locked once the Control room approves the second car
+    match /cardocs/{u} {
+      allow read: if (signedIn() && uid() == u) || isAdmin();
+      allow create, update: if isAdmin() || (signedIn() && uid() == u && !car2Ok(u));
+      allow delete: if isAdmin(); // account deletion on request
+    }
+
+    // ---------- selfie (face check at pickup) ----------
+    match /faces/{u} {
+      allow read: if (signedIn() && uid() == u) || isAdmin() || (signedIn() && linked(uid(), u));
+      allow create, update: if signedIn() && uid() == u && (!hasProfile(u) || prof(u).status != 'verified');
+      allow delete: if isAdmin(); // account deletion on request
+    }
+
+    // ---------- access links: the subject grants a viewer short-term access ----------
+    // id = viewer_subject ; written by the subject only, at most 30 days
+    match /links/{id} {
+      allow get: if signedIn() && (id.split('_')[0] == uid() || id.split('_')[1] == uid());
+      allow list: if false;
+      allow create, update: if signedIn() && id.split('_')[1] == uid()
+        && request.resource.data.until is number
+        && request.resource.data.until <= nowMs() + 30 * 86400000;
+      allow delete: if signedIn() && id.split('_')[1] == uid();
+    }
+
+    // ---------- trips ----------
+    match /trips/{t} {
+      allow read: if true;
+      allow create: if emailOk()
+        && request.resource.data.driverId == uid()
+        && prof(uid()).role == 'driver' && prof(uid()).status == 'verified'
+        && request.resource.data.status == 'open'
+        && request.resource.data.seats is int && request.resource.data.seats >= 1
+        && carPicked(request.resource.data)
+        && request.resource.data.seats <= carSeats(request.resource.data)
+        && request.resource.data.price is number && request.resource.data.price >= 50 && request.resource.data.price <= 3000
+        && (request.resource.data.fromProv == 'Venda (Limpopo)' || request.resource.data.toProv == 'Venda (Limpopo)')
+        && (request.resource.data.get('womenOnly', false) == false || priv(uid()).gender == 'Female');
+      allow update: if isAdmin()
+        || (signedIn() && resource.data.driverId == uid()
+            && !('driverId' in changed())
+            && request.resource.data.status in ['open', 'cancelled']
+            && carPicked(request.resource.data)
+            && request.resource.data.seats <= carSeats(request.resource.data)
+            && request.resource.data.price >= 50 && request.resource.data.price <= 3000);
+      allow delete: if false;
+    }
+
+    // ---------- bookings ----------
+    match /bookings/{b} {
+      function trip(id) { return get(/databases/$(database)/documents/trips/$(id)).data; }
+      function pins() { return get(/databases/$(database)/documents/pins/$(b)).data; }
+      function isRider() { return signedIn() && resource.data.riderId == uid(); }
+      function isDriver() { return signedIn() && resource.data.driverId == uid(); }
+      function okFare(d, t) {
+        let fare = (d.type == 'parcel' ? t.parcelPrice : d.seats * t.price) + d.bigBags * t.get('bagFee', 0);
+        // feesOn must match FEES_ON in app.js. Launch period: no booking fee, no commission.
+        let feesOn = false;
+        let fee = !feesOn ? 0 : (d.type == 'parcel' ? 10 : 15 * (d.seats < 1 ? 1 : d.seats));
+        let rate = !feesOn ? 0 : (d.type == 'parcel' ? 0.15 : (prof(t.driverId).pro == true ? 0.05 : 0.10));
+        return d.fare == fare && d.riderFee == fee && d.total == fare + fee
+          && d.commission == math.round(fare * rate) && d.driverNet == fare - d.commission;
+      }
+      // read: the rider, the driver, the Control room; family tracking link while sharing is on
+      allow get: if isRider() || isDriver() || isAdmin() || resource.data.get('share', {}).get('active', false) == true;
+      allow list: if isAdmin()
+        || (signedIn() && resource.data.riderId == uid())
+        || (signedIn() && resource.data.driverId == uid());
+
+      allow create: if emailOk()
+        && request.resource.data.riderId == uid()
+        && prof(uid()).role == 'rider' && prof(uid()).status in ['pending', 'verified']
+        && request.resource.data.status == 'requested'
+        && request.resource.data.type in ['seat', 'parcel']
+        && request.resource.data.seats is int && request.resource.data.seats >= 0 && request.resource.data.seats <= 6
+        && request.resource.data.bigBags is int && request.resource.data.bigBags >= 0 && request.resource.data.bigBags <= 6
+        && trip(request.resource.data.tripId).status == 'open'
+        && request.resource.data.driverId == trip(request.resource.data.tripId).driverId
+        && (request.resource.data.type == 'parcel' || request.resource.data.seats <= trip(request.resource.data.tripId).seats)
+        && (request.resource.data.type == 'seat' || trip(request.resource.data.tripId).parcelPrice > 0)
+        && (trip(request.resource.data.tripId).get('womenOnly', false) == false || priv(uid()).gender == 'Female')
+        && request.resource.data.pay in ['online', 'cash']
+        && (request.resource.data.pay == 'online' || trip(request.resource.data.tripId).acceptsCash == true)
+        && request.resource.data.get('pinTries', 0) == 0
+        && !('pin' in request.resource.data) && !('deliveryCode' in request.resource.data)
+        && okFare(request.resource.data, trip(request.resource.data.tripId));
+
+      allow update: if isAdmin()
+        // rider: cancel, share with family, refund marker on cancel
+        || (isRider() && onlyChanged(['status', 'share', 'payStatus', 'timeChanged', 'viewLog'])
+            && (!('status' in changed()) || (request.resource.data.status == 'cancelled' && resource.data.status in ['requested', 'confirmed']))
+            && (!('payStatus' in changed()) || request.resource.data.payStatus == 'refunded'))
+        // driver: accept / decline / cancel / PIN tries / start / drop off
+        || (isDriver() && onlyChanged(['status', 'pickedAt', 'doneAt', 'payStatus', 'payout', 'pinTry', 'pinTries', 'codeTry', 'codeTries', 'timeChanged', 'viewLog', 'share'])
+            // the driver may only switch family sharing off (at drop off)
+            && (!('share' in changed()) || request.resource.data.share.active == false)
+            && (!('payout' in changed()) || request.resource.data.payout == 'pending')
+            && (!('payStatus' in changed()) || request.resource.data.payStatus in ['released', 'refunded', 'paid-cash'])
+            && (!('pinTries' in changed()) || (request.resource.data.pinTries == resource.data.get('pinTries', 0) + 1 && request.resource.data.pinTries <= 5))
+            && (!('codeTries' in changed()) || (request.resource.data.codeTries == resource.data.get('codeTries', 0) + 1 && request.resource.data.codeTries <= 5))
+            && (!('pinTry' in changed()) || 'pinTries' in changed())
+            && (!('codeTry' in changed()) || 'codeTries' in changed())
+            && (!('status' in changed())
+                || (resource.data.status == 'requested' && request.resource.data.status in ['confirmed', 'declined'])
+                || (resource.data.status in ['requested', 'confirmed'] && request.resource.data.status == 'cancelled')
+                // start only with the right PIN (checked here, the driver cannot read it)
+                || (resource.data.status == 'confirmed' && request.resource.data.status == 'picked' && resource.data.get('pinTry', '') == pins().pin)
+                // finish: seat after pickup; parcel only with the receiver's code
+                || (resource.data.status == 'picked' && request.resource.data.status == 'completed'
+                    && (resource.data.type == 'seat' || resource.data.get('codeTry', '') == pins().code))));
+      allow delete: if false;
+    }
+
+    // ---------- secret PIN / delivery code: rider + Control room only ----------
+    match /pins/{b} {
+      allow read: if isAdmin() || (signedIn() && get(/databases/$(database)/documents/bookings/$(b)).data.riderId == uid());
+      allow create: if signedIn() && get(/databases/$(database)/documents/bookings/$(b)).data.riderId == uid()
+        && request.resource.data.pin is string && request.resource.data.pin.size() == 4;
+      allow update, delete: if false;
+    }
+
+    // ---------- family tracking pointer (code -> booking) ----------
+    match /tracks/{code} {
+      allow get: if true;
+      allow list: if false;
+      allow create, update: if signedIn() && get(/databases/$(database)/documents/bookings/$(request.resource.data.bookingId)).data.riderId == uid();
+      allow delete: if false;
+    }
+
+    // ---------- live GPS position of a trip in progress ----------
+    match /live/{b} {
+      function bk() { return get(/databases/$(database)/documents/bookings/$(b)).data; }
+      allow get: if isAdmin() || (signedIn() && (bk().riderId == uid() || bk().driverId == uid())) || bk().get('share', {}).get('active', false) == true;
+      allow list: if false;
+      allow create, update: if signedIn() && (bk().riderId == uid() || bk().driverId == uid()) && bk().status == 'picked'
+        && request.resource.data.keys().hasOnly(['lat', 'lng', 'at', 'by'])
+        && request.resource.data.lat is number && request.resource.data.lng is number && request.resource.data.by == uid();
+      allow delete: if false;
+    }
+
+    // ---------- chat between rider and driver ----------
+    match /messages/{m} {
+      function bk(id) { return get(/databases/$(database)/documents/bookings/$(id)).data; }
+      allow read: if isAdmin() || (signedIn() && uid() in resource.data.participants);
+      allow create: if signedIn() && request.resource.data.from == uid()
+        && request.resource.data.participants == [bk(request.resource.data.bookingId).riderId, bk(request.resource.data.bookingId).driverId]
+        && uid() in request.resource.data.participants
+        && isStr(request.resource.data.text, 1000);
+      allow update: if signedIn() && uid() in resource.data.participants && onlyChanged(['readBy']);
+      allow delete: if false;
+    }
+
+    // ---------- reviews (public), one per person per booking, only after the trip ----------
+    match /reviews/{r} {
+      function bk(id) { return get(/databases/$(database)/documents/bookings/$(id)).data; }
+      allow read: if true;
+      allow create: if signedIn() && request.resource.data.from == uid()
+        && r == request.resource.data.bookingId + '_' + uid()
+        && bk(request.resource.data.bookingId).status == 'completed'
+        && ((bk(request.resource.data.bookingId).riderId == uid() && request.resource.data.to == bk(request.resource.data.bookingId).driverId)
+            || (bk(request.resource.data.bookingId).driverId == uid() && request.resource.data.to == bk(request.resource.data.bookingId).riderId))
+        && request.resource.data.stars is int && request.resource.data.stars >= 1 && request.resource.data.stars <= 5
+        && isStr(request.resource.data.text, 500);
+      allow update, delete: if isAdmin();
+    }
+
+    // ---------- notifications ----------
+    match /notes/{n} {
+      allow read: if signedIn() && (resource.data.to == uid() || (resource.data.to == 'admins' && isAdmin()));
+      allow create: if signedIn() && request.resource.data.from == uid() && isStr(request.resource.data.text, 400) && request.resource.data.read == false;
+      allow update: if signedIn() && (resource.data.to == uid() || (resource.data.to == 'admins' && isAdmin())) && onlyChanged(['read']);
+      allow delete: if false;
+    }
+
+    // ---------- lift requests ("riders looking") ----------
+    // ---------- public counters for the home page (no names, no numbers, no addresses) ----------
+    match /openRequests/{q} {
+      function rq() { return get(/databases/$(database)/documents/requests/$(q)); }
+      allow read: if true;
+      allow create: if signedIn() && rq().data.riderId == uid()
+        && request.resource.data.keys().hasOnly(['fp', 'tp', 'date', 'seats', 'at'])
+        && request.resource.data.fp == rq().data.fp && request.resource.data.tp == rq().data.tp;
+      allow delete: if signedIn() && (isAdmin() || !exists(/databases/$(database)/documents/requests/$(q)) || rq().data.riderId == uid());
+      allow update: if false;
+    }
+    match /completions/{b} {
+      function bk() { return get(/databases/$(database)/documents/bookings/$(b)).data; }
+      allow read: if true;
+      allow create: if signedIn() && bk().driverId == uid() && bk().status == 'completed'
+        && request.resource.data.keys().hasOnly(['tripId', 'at']) && request.resource.data.tripId == bk().tripId;
+      allow update, delete: if false;
+    }
+
+    match /requests/{q} {
+      allow read: if signedIn();
+      allow create: if emailOk() && request.resource.data.riderId == uid() && prof(uid()).role == 'rider';
+      allow delete: if signedIn() && resource.data.riderId == uid() || isAdmin();
+      allow update: if false;
+    }
+
+    // ---------- SOS alerts and family concerns ----------
+    match /alerts/{a} {
+      allow read: if isAdmin() || (signedIn() && resource.data.userId == uid());
+      allow create: if (signedIn() && request.resource.data.userId == uid())
+        // a family member on the tracking page (no account) can raise a concern
+        || (request.resource.data.kind == 'concern' && request.resource.data.userId == null && isStr(request.resource.data.by, 60));
+      allow update: if isAdmin();
+      allow delete: if false;
+    }
+
+    // ---------- driver money ----------
+    // top up requests: driver asks, Control room marks received
+    match /topups/{x} {
+      allow read: if isAdmin() || (signedIn() && resource.data.driverId == uid());
+      allow create: if signedIn() && request.resource.data.driverId == uid() && request.resource.data.status == 'requested'
+        && request.resource.data.amount is number && request.resource.data.amount > 0 && request.resource.data.amount <= 5000;
+      allow update: if isAdmin();
+      allow delete: if false;
+    }
+    // wallet entries (top ups received, Pro fees, adjustments): Control room only
+    match /ledger/{x} {
+      allow read: if isAdmin() || (signedIn() && resource.data.driverId == uid());
+      allow write: if isAdmin();
+    }
+
+    // everything else: closed
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

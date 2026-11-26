@@ -35,7 +35,9 @@ const coord = (p, t) => PLACES[p]?.[t] || Object.values(PLACES[p] || PLACES[VEND
 const EMERGENCY = [['SAPS Police', '10111'], ['Emergency (any cellphone)', '112'], ['Ambulance & fire', '10177']];
 
 /* ---------------- Platform fees (see business model document) ---------------- */
-const FEES = { seat: 15, parcel: 10, commission: 0.10, parcelCommission: 0.15, pro: 0.05, proMonthly: 199 };
+/* FEES_ON = false: launch period. No booking fee for riders and no platform fee for drivers. Riders pay the driver the price shown. */
+const FEES_ON = false;
+const FEES = FEES_ON ? { seat: 15, parcel: 10, commission: 0.10, parcelCommission: 0.15, pro: 0.05, proMonthly: 199 } : { seat: 0, parcel: 0, commission: 0, parcelCommission: 0, pro: 0, proMonthly: 0 };
 function feesOf(fare, type, seats, pro) {
   const riderFee = type === 'parcel' ? FEES.parcel : FEES.seat * Math.max(1, seats);
   const rate = type === 'parcel' ? FEES.parcelCommission : pro ? FEES.pro : FEES.commission;
@@ -169,7 +171,7 @@ function photoQuality(img, kind) {
   if (sharp < (kind === 'card' ? 250 : 60)) issues.push(kind === 'card' ? 'Blurry: hold still, the text must be readable' : 'A bit blurry: hold still and try again');
   return { ok: !issues.length, issues, mean: Math.round(mean), sharp: Math.round(sharp) };
 }
-const photoKind = name => name === 'selfie' ? 'face' : ['idPhoto', 'licence', 'prdp', 'disc'].includes(name) ? 'card' : 'free';
+const photoKind = name => name === 'selfie' ? 'face' : ['idPhoto', 'licence', 'prdp', 'disc', 'disc2'].includes(name) ? 'card' : 'free';
 const photoMax = name => photoKind(name) === 'card' ? 1100 : name === 'selfie' ? 800 : 1000;
 function setPhoto(name, url, q) {
   PHOTOS[name] = url;
@@ -328,7 +330,7 @@ const DB_KEY = 'ttv_db_v7'; // v7 = fresh start, no sample data
 /* Card / Instant EFT payments need a payment provider (e.g. PayFast). Until one is connected, live trips are cash only. */
 const PAY_ONLINE = !window.Cloud?.on || !!window.Cloud?.cfg?.onlinePayments;
 /* ---------------- Rules & policies ---------------- */
-const POLICY_V = '1.0 · 25 November 2026';
+const POLICY_V = '1.1 · 26 November 2026';
 // pickups and drop offs are door to door: never at taxi ranks, bus terminals or taxi stops
 const RANK_RE = /\b(taxi\s*rank|rank|taxi\s*stop|taxi\s*stand|bus\s*terminus|bus\s*terminal|terminus|park\s*station|bosman\s*station)\b/i;
 const rankMsg = 'Trip To Venda is door to door. Use a home, work or business address, not a taxi rank, taxi stop or bus terminal.';
@@ -337,6 +339,17 @@ const ridersLooking = () => { const ids = new Set(); [...(db.requests || []), ..
 const VTYPES = { car: { label: 'Private car', max: 4, eg: 'e.g. Toyota Corolla, VW Polo', hint: 'Sedan or hatchback, up to 4 passengers' }, seven: { label: '7 seater', max: 6, eg: 'e.g. Toyota Avanza, Suzuki Ertiga, Toyota Innova', hint: '7 seats including the driver, up to 6 passengers' } };
 const vType = v => VTYPES[v?.type] ? v.type : ((v?.seats || 4) > 4 ? 'seven' : 'car');
 const vLabel = v => VTYPES[vType(v)].label;
+/* A driver can register up to two cars and must drive them personally. Car 2 is checked by the Control room (vehicle2.ok).
+   Each trip stores the car the driver picked (t.car = 1 or 2), and riders see that car. */
+const car2Ready = d => !!(d?.vehicle2 && d.vehicle2.ok === true);
+const tripDriver = t => { const d = user(t?.driverId); return d && t.car === 2 && d.vehicle2 ? Object.assign({}, d, { vehicle: d.vehicle2 }) : d; };
+const carOf = t => tripDriver(t)?.vehicle || {};
+const myCar = n => n === 2 && car2Ready(me) ? me.vehicle2 : me.vehicle || {};
+const carNo = f => car2Ready(me) && +(f.car?.value || 1) === 2 ? 2 : 1;
+function carSelect(sel = 1) {
+  if (!car2Ready(me)) return '<input type="hidden" name="car" value="1">';
+  return `<div class="field"><label>Car for this trip</label><select name="car">${[1, 2].map(n => { const v = myCar(n); return `<option value="${n}" data-seats="${v.seats || 4}" ${n === sel ? 'selected' : ''}>${esc(v.colour)} ${esc(v.make)} · ${esc(v.reg)}</option>`; }).join('')}</select></div>`;
+}
 let db, me = null;
 function save() { if (window.Cloud?.on) return Cloud.save(); if (!store.set(DB_KEY, JSON.stringify(db))) toast('Phone storage is full, try smaller photos', 'err'); }
 async function load() {
@@ -496,7 +509,7 @@ function carSVG(v = {}, style = '') {
 const selectOpts = (list, sel, any) => (any ? `<option value="">${any}</option>` : '') + list.map(x => `<option ${x === sel ? 'selected' : ''}>${esc(x)}</option>`).join('');
 
 function tripCard(t, mode) {
-  const d = user(t.driverId), left = seatsLeft(t), r = tripRoute(t);
+  const d = tripDriver(t), left = seatsLeft(t), r = tripRoute(t);
   return `<a class="card trip" href="#/trip/${t.id}${mode === 'parcel' ? '?type=parcel' : ''}">
     <div class="trip-body">
       <div class="row between top"><span class="badge b-grey">${ic('cal')}${fmtDate(t.date)}</span><div class="price">${R(mode === 'parcel' ? t.parcelPrice : t.price)}<small>${mode === 'parcel' ? 'per parcel' : 'per seat'}</small></div></div>
@@ -574,7 +587,7 @@ V.home = () => {
         <span class="role-tag driver">${ic('car', 'sm')} Driver section</span>
         <a class="live-pill" href="#/dashboard?tab=req" style="color:inherit"><i></i>${looking ? `${looking} rider${looking === 1 ? ' is' : 's are'} looking for a lift · see them` : 'No riders waiting right now'}</a>
         <h1>Driving home, ${nm}?<br>Fill your <em>empty seats.</em></h1>
-        <p class="lead">Post your trip, set your own price and collect verified riders at their door. Your earnings, trips and wallet are on your dashboard.</p>
+        <p class="lead">Post your trip, set your own price and collect verified riders at their door. Your earnings and trips are on your dashboard.</p>
         <div class="btns"><a class="btn btn-accent btn-lg" href="#/post">${ic('plus')} Post a trip</a><a class="btn btn-glass btn-lg" href="#/dashboard?tab=earn">${ic('wallet')} My earnings</a><a class="btn btn-glass btn-lg" href="#/search">${ic('search')} Find a ride</a></div>`
     : role === 'rider' ? `
         <span class="role-tag rider">${ic('user', 'sm')} Rider section</span>
@@ -666,7 +679,7 @@ V.search = q => {
 
 V.trip = (id, q = {}) => {
   const t = tripById(id); if (!t) return `<div class="wrap page">${empty('info', 'Trip not found', 'It may have been removed.', '<a class="btn" href="#/search">Browse trips</a>')}</div>`;
-  const d = user(t.driverId), left = seatsLeft(t), r = tripRoute(t), rv = db.reviews.filter(x => x.to === d.id).slice(-4).reverse();
+  const d = tripDriver(t), left = seatsLeft(t), r = tripRoute(t), rv = db.reviews.filter(x => x.to === d.id).slice(-4).reverse();
   const mine = me && me.id === t.driverId;
   const ex = me && db.bookings.find(b => b.tripId === t.id && b.riderId === me.id && ACTIVE.includes(b.status));
   let side;
@@ -748,14 +761,14 @@ function bookForm(t, left, preType) {
       <div class="field" style="margin-top:12px"><label>Note to driver (optional)</label><input name="note" placeholder="e.g. I'll wait at the Spar gate"></div>
       <label class="check"><input type="checkbox" name="agree"> My luggage has no illegal or dangerous items, and I'll follow the driver's trip rules.</label>
     </div>
-    <div class="total"><div><span>Total incl. booking fee</span><div class="xs" style="opacity:.7" id="feeLine">${R(t.price)} fare + ${R(FEES.seat)} booking fee</div></div><b id="bookTotal">${R(t.price + FEES.seat)}</b></div>
+    <div class="total"><div><span>${FEES_ON ? 'Total incl. booking fee' : 'Total you pay the driver'}</span><div class="xs" style="opacity:.7" id="feeLine">${FEES_ON ? `${R(t.price)} fare + ${R(FEES.seat)} booking fee` : 'No booking fee'}</div></div><b id="bookTotal">${R(t.price + FEES.seat)}</b></div>
     <div class="row"><button type="button" class="btn btn-ghost hidden" data-act="stepBack">${ic('left', 'sm')} Back</button><button type="button" class="btn" data-act="stepNext" style="flex:1">Continue ${ic('right', 'sm')}</button></div>
   </form>`;
 }
 function priceFor(t, type, seats, big) { const fare = (type === 'parcel' ? t.parcelPrice : seats * t.price) + (big || 0) * (t.bagFee || 0); return feesOf(fare, type, seats, user(t.driverId)?.pro); }
 function formPrice(f) { const t = tripById(f.dataset.trip); return priceFor(t, f.type.value, +f.seats.value || 1, +f.bigBags.value || 0); }
 function calcTotal(t, f) { return formPrice(f).total; }
-function updateTotal(f) { const p = formPrice(f); $('#bookTotal').textContent = R(p.total); $('#feeLine').textContent = `${R(p.fare)} fare + ${R(p.riderFee)} booking fee`; }
+function updateTotal(f) { const p = formPrice(f); $('#bookTotal').textContent = R(p.total); $('#feeLine').textContent = FEES_ON ? `${R(p.fare)} fare + ${R(p.riderFee)} booking fee` : 'No booking fee'; }
 
 /* --- map pins: tap to pin, drag to adjust, or detect automatically --- */
 function mountPinMaps(f) {
@@ -797,7 +810,7 @@ function openCheckout(f) {
   pendingBookForm = f; const p = formPrice(f), t = tripById(f.dataset.trip);
   modal(`${sheetHead('Secure payment', `${esc(short(t.fromTown))} → ${esc(short(t.toTown))} · ${fmtDate(t.date)}`)}
     <div class="sum-row"><span>${f.type.value === 'parcel' ? 'Parcel delivery' : f.seats.value + ' × seat'}${+f.bigBags.value ? ' + bags' : ''}</span><b>${R(p.fare)}</b></div>
-    <div class="sum-row"><span>Booking fee</span><b>${R(p.riderFee)}</b></div>
+    ${FEES_ON ? `<div class="sum-row"><span>Booking fee</span><b>${R(p.riderFee)}</b></div>` : ''}
     <div class="total" style="margin:12px 0"><span>You pay now</span><b>${R(p.total)}</b></div>
     <div class="step-label" style="margin-bottom:8px">Pay with</div>
     <div class="togs" style="margin-bottom:14px">${['Card', 'Instant EFT', 'Capitec Pay', 'SnapScan'].map((x, i) => `<label class="tog"><input type="radio" name="pm" value="${x}" ${i ? '' : 'checked'}><span>${x}</span></label>`).join('')}</div>
@@ -835,7 +848,7 @@ function showStep(f, s) {
   if (s === 2) setTimeout(() => mountPinMaps(f), 30);
   if (s === 4) {
     const t = tripById(f.dataset.trip), seat = f.type.value === 'seat', big = +f.bigBags.value, p = formPrice(f), pins = f._pins || {};
-    $('#summary').innerHTML = `<div class="sum-row"><span>${seat ? f.seats.value + ' × seat × ' + R(t.price) : 'Parcel delivery'}</span><b>${R(seat ? f.seats.value * t.price : t.parcelPrice)}</b></div>${big ? `<div class="sum-row"><span>${big} × extra large bag</span><b>${R(big * t.bagFee)}</b></div>` : ''}<div class="sum-row"><span>Booking fee</span><b>${R(p.riderFee)}</b></div><div class="sum-row"><span>Pickup</span><b style="text-align:right;max-width:62%">${esc(f.pickup.value)}${pins.pickup ? `<br><span class="xs muted">📍 ${near(pins.pickup)}</span>` : '<br><span class="xs" style="color:#8a5a00">No pin, driver will call you</span>'}</b></div><div class="sum-row"><span>Drop off</span><b style="text-align:right;max-width:62%">${esc(f.dropoff.value)}${pins.dropoff ? `<br><span class="xs muted">📍 ${near(pins.dropoff)}</span>` : ''}</b></div><div class="sum-row"><span>Luggage</span><b>${f.bags.value} bag(s) + ${big} XL</b></div>`;
+    $('#summary').innerHTML = `<div class="sum-row"><span>${seat ? f.seats.value + ' × seat × ' + R(t.price) : 'Parcel delivery'}</span><b>${R(seat ? f.seats.value * t.price : t.parcelPrice)}</b></div>${big ? `<div class="sum-row"><span>${big} × extra large bag</span><b>${R(big * t.bagFee)}</b></div>` : ''}${FEES_ON ? `<div class="sum-row"><span>Booking fee</span><b>${R(p.riderFee)}</b></div>` : ''}<div class="sum-row"><span>Pickup</span><b style="text-align:right;max-width:62%">${esc(f.pickup.value)}${pins.pickup ? `<br><span class="xs muted">📍 ${near(pins.pickup)}</span>` : '<br><span class="xs" style="color:#8a5a00">No pin, driver will call you</span>'}</b></div><div class="sum-row"><span>Drop off</span><b style="text-align:right;max-width:62%">${esc(f.dropoff.value)}${pins.dropoff ? `<br><span class="xs muted">📍 ${near(pins.dropoff)}</span>` : ''}</b></div><div class="sum-row"><span>Luggage</span><b>${f.bags.value} bag(s) + ${big} XL</b></div>`;
   }
   if (f.getBoundingClientRect().top < 60) f.scrollIntoView({ behavior: 'smooth', block: 'start' });
 }
@@ -857,7 +870,7 @@ V.signup = q => {
     <div class="field"><label>Email</label><input name="email" type="email" required autocomplete="email"></div>
     <div class="field"><label>Password</label>${pwField('name="password" minlength="8" required autocomplete="new-password"')}<div class="hint">At least 8 characters, with upper and lower case letters and a number.</div></div>
     <div class="card" style="background:#fafcfb;margin-bottom:14px"><div class="card-title">${ic('alert', 'sm')}<b class="small">Emergency contact</b></div><div class="grid g2"><div class="field" style="margin:0"><label>Name</label><input name="emergencyName" required placeholder="e.g. Mom"></div><div class="field" style="margin:0"><label>Cellphone</label><input name="emergencyPhone" type="tel" required placeholder="e.g. 071 234 5678"></div></div></div>
-    <label class="check"><input type="checkbox" name="agree" required> I agree to the <a href="#/rules?tab=terms" target="_blank">Terms of use</a>, <a href="#/rules?tab=community" target="_blank">Community rules</a> and <a href="#/rules?tab=privacy" target="_blank">Privacy policy</a>, and consent to my ID being checked for everyone's safety (POPIA).</label><br>
+    <label class="check"><input type="checkbox" name="agree" required> <span>I agree to the <a href="#/rules?tab=terms" target="_blank">Terms of use</a>, <a href="#/rules?tab=community" target="_blank">Community rules</a> and <a href="#/rules?tab=privacy" target="_blank">Privacy policy</a>, and consent to my ID being checked for everyone's safety (POPIA).</span></label><br>
     <button class="btn btn-block btn-lg">Create account</button>
     <p class="small muted" style="text-align:center;margin-top:14px">Already have an account? <a href="#/login" class="b">Log in</a></p>
   </form>`);
@@ -870,11 +883,105 @@ V.complete = () => {
     <div class="field"><label>Full name (as on your ID)</label><input name="name" required autocomplete="name" value="${esc(g.name || '')}"></div>
     <div class="grid g2"><div class="field"><label>Cellphone</label><input name="phone" type="tel" required placeholder="e.g. 071 234 5678" autocomplete="tel"></div><div class="field"><label>Gender</label><select name="gender" required><option value="">Select</option><option>Female</option><option>Male</option></select></div></div>
     <div class="card" style="background:#fafcfb;margin-bottom:14px"><div class="card-title">${ic('alert', 'sm')}<b class="small">Emergency contact</b></div><div class="grid g2"><div class="field" style="margin:0"><label>Name</label><input name="emergencyName" required></div><div class="field" style="margin:0"><label>Cellphone</label><input name="emergencyPhone" type="tel" required></div></div></div>
-    <label class="check"><input type="checkbox" name="agree" required> I agree to the <a href="#/rules?tab=terms" target="_blank">Terms of use</a>, <a href="#/rules?tab=community" target="_blank">Community rules</a> and <a href="#/rules?tab=privacy" target="_blank">Privacy policy</a>, and consent to my ID being checked for everyone's safety (POPIA).</label><br>
+    <label class="check"><input type="checkbox" name="agree" required> <span>I agree to the <a href="#/rules?tab=terms" target="_blank">Terms of use</a>, <a href="#/rules?tab=community" target="_blank">Community rules</a> and <a href="#/rules?tab=privacy" target="_blank">Privacy policy</a>, and consent to my ID being checked for everyone's safety (POPIA).</span></label><br>
     <button class="btn btn-block btn-lg">Finish and continue</button>
     <p class="small muted" style="text-align:center;margin-top:14px">Wrong account? <a href="#" data-act="logout" class="b">Use a different one</a></p>
   </form>`);
 };
+/* ---------------- My cars (drivers): up to two cars, the registered driver drives both ---------------- */
+function carsCard() {
+  if (/cars=1/.test(location.hash)) setTimeout(() => $('#cars')?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 300);
+  const v = me.vehicle || {}, v2 = me.vehicle2, inUse = db.trips.some(t => t.driverId === me.id && t.car === 2 && t.status === 'open' && t.date >= today());
+  const row = (x, n, badge) => `<div class="row car-row" style="background:#fafcfb;border-radius:14px;padding:10px 14px;margin-bottom:10px;align-items:center;flex-wrap:wrap;gap:10px">${carSVG(x, 'width:70px;flex:none')}<div style="flex:1;min-width:150px"><b class="small">Car ${n} · ${esc(x.colour)} ${esc(x.make)} ${esc(x.year || '')}</b><div class="xs muted">${vLabel(x)} · ${x.seats} passenger seats</div><span class="plate">${esc(x.reg)}</span></div>${badge}</div>`;
+  let body = row(v, 1, `<span class="badge">${ic('check', 'sm')}Verified</span>`);
+  if (v2) {
+    body += row(v2, 2, v2.ok ? `<span class="badge">${ic('check', 'sm')}Approved</span>` : v2.reject ? `<span class="badge b-danger">Declined</span>` : `<span class="badge b-accent">${ic('clock', 'sm')}Waiting for review</span>`);
+    if (v2.reject) body += `<div class="banner bad" style="margin-bottom:10px">${ic('info')}<span>Car 2 was declined: <b>${esc(v2.reject)}</b>. Remove it and add it again with the right details.</span></div>`;
+    else if (!v2.ok) body += `<p class="xs muted" style="margin:-2px 0 10px">Our team checks the disc and car photo. You can post trips with car 1 in the meantime.</p>`;
+    body += `<button type="button" class="btn btn-ghost btn-sm" data-act="car2Remove" ${inUse ? 'disabled' : ''}>${ic('close', 'sm')} Remove car 2</button>${inUse ? '<p class="xs muted" style="margin-top:6px">You have open trips with this car. Finish or cancel them first.</p>' : ''}`;
+  } else {
+    const d = { type: 'car', seats: 4 };
+    body += `<form id="car2Form" style="margin-top:14px"><div class="card-title" style="margin-bottom:8px">${ic('plus')}<h3>Add a second car</h3></div>
+      <div class="vtypes">${Object.entries(VTYPES).map(([k, x]) => `<label class="paycard"><input type="radio" name="vtype" value="${k}" ${k === 'car' ? 'checked' : ''} required><span><b>${ic('car', 'sm')} ${x.label}</b><small>${x.hint}.</small></span></label>`).join('')}</div>
+      <div class="grid g3" style="margin-top:10px">
+        <div class="field"><label>Make & model</label><input name="make" required placeholder="${VTYPES.car.eg}"></div>
+        <div class="field"><label>Year</label><input name="year" type="number" min="1995" max="${new Date().getFullYear() + 1}" required></div>
+        <div class="field"><label>Colour</label><input name="colour" required placeholder="e.g. Silver"></div>
+        <div class="field"><label>Number plate</label><input name="reg" required placeholder="e.g. KMN 204 L" style="text-transform:uppercase"></div>
+        <div class="field"><label>Passenger seats (not counting you)</label><input name="vseats" type="number" min="1" max="${VTYPES.car.max}" value="${d.seats}" required></div>
+        <div class="field"><label>Licence disc expiry</label><input type="date" name="discExpiry" required></div>
+      </div>
+      <div class="grid g2" style="margin-bottom:14px">${upload('disc2', 'Licence disc of car 2', 'Photo of the disc on the windscreen')}${upload('carPhoto2', 'Car 2 photo with number plate', 'Plate must be readable')}</div>
+      <label class="check" style="margin-bottom:14px"><input type="checkbox" name="own" required><span>I will drive this car myself on every trip I post with it. No one else drives my trips on Trip To Venda.</span></label>
+      <button class="btn btn-block">${ic('send', 'sm')} Send car 2 for review</button></form>`;
+  }
+  return `<div class="card pad-lg" id="cars" style="margin-top:18px"><div class="card-title">${ic('car')}<h3>My cars</h3></div>
+    <p class="small muted" style="margin:-4px 0 12px">You can register up to two cars, and <b>you must be the driver of both</b>. When you post a trip you choose the car you are using, and riders see that car and its number plate.</p>${body}</div>`;
+}
+F.car2Form = f => {
+  if (!me || me.role !== 'driver' || me.status !== 'verified') return toast('Only verified drivers can add a second car', 'err');
+  const vt = VTYPES[f.vtype?.value]; if (!vt) return toast('Choose the vehicle type', 'err');
+  const vs = +f.vseats.value, reg = f.reg.value.trim().toUpperCase();
+  if (!(vs >= 1 && vs <= vt.max)) return toast(`A ${vt.label.toLowerCase()} can take 1 to ${vt.max} passengers`, 'err');
+  if (!plateOK(reg)) return toast('Enter a valid number plate, e.g. KMN 204 L', 'err');
+  if (reg.replace(/\s/g, '') === String(me.vehicle?.reg || '').toUpperCase().replace(/\s/g, '')) return toast('That is the plate of car 1', 'err');
+  if (!future(f.discExpiry.value)) return toast('The licence disc is expired, renew it first', 'err');
+  if (!PHOTOS.disc2 || !PHOTOS.carPhoto2) return toast('Add the licence disc photo and the car photo with the plate', 'err');
+  if (!f.own.checked) return toast('Please confirm you will drive this car yourself', 'err');
+  me.vehicle2 = { type: f.vtype.value, make: f.make.value.trim(), year: +f.year.value, colour: f.colour.value.trim(), reg, seats: vs, discExpiry: f.discExpiry.value, ok: false, at: Date.now() };
+  me.docs = Object.assign({}, me.docs, { disc2: PHOTOS.disc2, carPhoto2: PHOTOS.carPhoto2 });
+  save(); toast('Car 2 sent for review ✔ We will let you know'); render();
+};
+F.car2RejectForm = f => { const u = user(f.dataset.id); if (!u?.vehicle2 || me?.role !== 'admin') return; u.vehicle2 = Object.assign({}, u.vehicle2, { ok: false, reject: f.reason.value }); notify(u.id, `Your second car was declined: ${f.reason.value}`, '#/verify?cars=1'); save(); closeModal(); toast(first(u.name) + ' notified'); render(); };
+const CAR2_ACTIONS = {
+  car2Remove: () => {
+    if (db.trips.some(t => t.driverId === me.id && t.car === 2 && t.status === 'open' && t.date >= today())) return toast('You have open trips with car 2', 'err');
+    if (!confirm('Remove car 2 from your account?')) return;
+    delete me.vehicle2; me.docs = Object.assign({}, me.docs, { disc2: '', carPhoto2: '' }); save(); toast('Car 2 removed'); render();
+  },
+  car2Ok: el => { const u = user(el.dataset.id); if (!u?.vehicle2 || me?.role !== 'admin') return; const { reject, ...v } = u.vehicle2; u.vehicle2 = Object.assign(v, { ok: true }); notify(u.id, '✔ Your second car is approved. Choose it when you post a trip.', '#/post'); save(); toast('Car 2 approved'); render(); },
+  car2No: el => modal(`${sheetHead('Decline second car', 'The driver sees this reason')}<form id="car2RejectForm" data-id="${el.dataset.id}"><div class="field"><label>Reason</label><select name="reason">${['Licence disc photo is not clear', 'Licence disc is expired', 'Number plate is not readable on the car photo', 'Plate does not match the photo', 'Details do not match the documents', 'Minibuses and taxis are not allowed'].map(x => `<option>${x}</option>`).join('')}</select></div><button class="btn btn-danger btn-block">Decline</button></form>`)
+};
+function car2Reviews() {
+  const list = db.users.filter(u => u.role === 'driver' && u.vehicle2 && !u.vehicle2.ok && !u.vehicle2.reject);
+  return `<h3 style="margin:26px 0 12px">Second cars waiting (${list.length})</h3><div class="grid g2">${list.map(u => { const v = u.vehicle2, d = u.docs || {}; return `<div class="card pad-lg"><div class="row">${avatar(u, 'sm')}<div><b>${esc(u.name)}</b><div class="xs muted">Car 1: ${esc(u.vehicle?.colour)} ${esc(u.vehicle?.make)} · ${esc(u.vehicle?.reg)}</div></div></div>
+    <p class="small" style="margin:10px 0"><b>Car 2:</b> ${esc(v.colour)} ${esc(v.make)} ${esc(v.year || '')} · ${vLabel(v)} · ${v.seats} seats<br><span class="plate">${esc(v.reg)}</span> ${plateOK(v.reg) ? '' : '<span class="badge b-danger">Plate format?</span>'} · disc expires ${esc(v.discExpiry)} ${future(v.discExpiry) ? '' : '<span class="badge b-danger">Expired</span>'}</p>
+    <div class="grid g2">${[['disc2', 'Licence disc'], ['carPhoto2', 'Car + plate']].map(([k, l]) => d[k] ? `<figure style="margin:0"><img src="${d[k]}" alt="${l}" data-act="img" style="width:100%;border-radius:10px"><figcaption class="xs muted">${l}</figcaption></figure>` : `<div class="note">${l} missing</div>`).join('')}</div>
+    <div class="btns" style="margin-top:12px"><button class="btn btn-sm" data-act="car2Ok" data-id="${u.id}">${ic('check', 'sm')} Approve car 2</button><button class="btn btn-sm btn-ghost" data-act="car2No" data-id="${u.id}">Decline</button></div></div>`; }).join('') || empty('car', 'No second cars waiting', 'New second cars from drivers show here.')}</div>`;
+}
+
+/* ---------------- Account deletion (on request, done by admin) ---------------- */
+function deleteCard() {
+  return `<div class="card pad-lg" style="margin-top:18px"><div class="card-title">${ic('user')}<h3>Delete my account</h3></div>
+    ${me.deleteRequested ? `<div class="banner info">${ic('clock')}<span>You asked to delete your account on ${new Date(me.deleteRequested).toLocaleDateString('en-ZA', { day: 'numeric', month: 'short' })}. Our team will delete it and let you know. Changed your mind? <a href="#" data-act="delCancel" class="b">Keep my account</a></span></div>`
+      : `<p class="small muted" style="margin-bottom:12px">We will remove your personal details, documents and login. Open trips and bookings are cancelled. Past trip records stay, without your name, for safety and the law.</p><button type="button" class="btn btn-ghost" data-act="delAsk" style="color:var(--danger)">${ic('close', 'sm')} Delete my account</button>`}</div>`;
+}
+async function deleteAccount(u) {
+  if (!u || u.role === 'admin' || me?.role !== 'admin') return;
+  const now = today();
+  db.trips.filter(t => t.driverId === u.id && t.status === 'open' && t.date >= now).forEach(t => {
+    t.status = 'cancelled';
+    db.bookings.filter(b => b.tripId === t.id && ['requested', 'confirmed'].includes(b.status)).forEach(b => { b.status = 'cancelled'; notify(b.riderId, `Your trip ${short(t.fromTown)} → ${short(t.toTown)} on ${fmtDate(t.date)} was cancelled because the driver's account was closed. Please book another trip.`, '#/search'); });
+  });
+  db.bookings.filter(b => b.riderId === u.id && ['requested', 'confirmed'].includes(b.status)).forEach(b => { b.status = 'cancelled'; const t = tripById(b.tripId); if (t) notify(t.driverId, `A booking on ${short(t.fromTown)} → ${short(t.toTown)} (${fmtDate(t.date)}) was cancelled because the rider's account was closed.`, '#/dashboard?tab=trips'); });
+  db.requests = (db.requests || []).filter(r => r.riderId !== u.id);
+  const keep = { id: u.id, role: u.role, name: 'Deleted user', status: 'deleted', pro: false, docs: {} };
+  if (u.created) keep.created = u.created;
+  if (u.vehicle) keep.vehicle = { type: u.vehicle.type || 'car', seats: u.vehicle.seats || 4, make: '', colour: '', reg: '' };
+  Object.keys(u).forEach(k => delete u[k]); Object.assign(u, keep);
+  save(); closeModal();
+  const res = window.Cloud?.on ? await Cloud.purge(u.id) : 'local';
+  if (res === 'manual') toast('Account deleted. Also remove their login in Firebase → Authentication → Users', 'err'); else toast('Account deleted ✔');
+  render();
+}
+const DEL_ACTIONS = {
+  delAsk: () => askConfirm('Delete your account?', 'Our team will delete your personal details, documents and login, and cancel your open trips and bookings. This can’t be undone once it is done.', 'Yes, delete my account', () => {
+    me.deleteRequested = Date.now(); notify('admins', `${me.name} (${me.role}) asked to delete their account`, '#/admin?tab=users&role=del'); save(); closeModal(); toast('Request sent ✔ We will let you know'); render();
+  }),
+  delCancel: () => { delete me.deleteRequested; notify('admins', `${me.name} no longer wants their account deleted`, '#/admin?tab=users'); save(); toast('Your account stays ✔'); render(); },
+  delUser: el => { const u = user(el.dataset.id); if (!u) return; askConfirm(`Delete ${esc(u.name)}?`, 'Their personal details, documents and login are removed, open trips and bookings are cancelled and the other people are told. Past trip records stay as “Deleted user”. This can’t be undone.', 'Delete account', () => deleteAccount(u)); }
+};
+
 V.login = q => authShell('Welcome back', 'Log in to book, track and manage your trips.', `<form id="loginForm" data-next="${esc(q.next || '')}"><!--head-->${googleBtn()}
     <div class="field"><label>${window.Cloud?.on ? 'Email' : 'Email or cellphone'}</label><input name="login" ${window.Cloud?.on ? 'type="email"' : ''} required autocomplete="username"></div>
     <div class="field"><label>Password</label>${pwField('name="password" required autocomplete="current-password"')}</div>
@@ -936,10 +1043,12 @@ V.verify = () => {
       <div class="decl"><div class="card-title" style="margin-bottom:8px">${ic('shield')}<h3>4 · Driver declaration</h3></div>
         <label class="check"><input type="checkbox" name="d1" required ${me.driverDecl ? 'checked' : ''}> I only offer seats on trips I am making myself, booked in advance through Trip To Venda. I don't roam, stand for hire, or pick up anyone who did not book.</label>
         <label class="check"><input type="checkbox" name="d2" required ${me.driverDecl ? 'checked' : ''}> I never load or offload at taxi ranks, taxi stops or bus terminals, I never tout for passengers, and my car has no taxi signs, roof light or meter.</label>
-        <label class="check"><input type="checkbox" name="d3" required ${me.driverDecl ? 'checked' : ''}> I hold every licence and permit the law requires to carry passengers for payment (including my PrDP and any operating licence), my car is roadworthy and insured, and I am responsible for any fines.</label>
+        <label class="check"><input type="checkbox" name="d3" required ${me.driverDecl ? 'checked' : ''}> I hold every licence and permit the law requires to carry passengers for payment (including my PrDP and any operating licence), and I am responsible for any fines.</label>
         <p class="xs muted" style="margin:6px 0 0">Read the <a href="#/rules?tab=drivers" target="_blank">Driver rules</a> and <a href="#/rules?tab=position" target="_blank">our position on the taxi industry</a>.</p></div>` : ''}
       <button class="btn btn-block btn-lg" ${locked ? 'disabled' : ''}>${me.status === 'pending' ? 'Update & resubmit' : locked ? 'Verified ✓' : 'Submit for safety review'}</button>
     </form>
+    ${drv && locked ? carsCard() : ''}
+    ${deleteCard()}
   </div>`;
 };
 F.verifyForm = async f => {
@@ -1038,7 +1147,7 @@ function riderDash(q) {
 }
 
 function riderBooking(b) {
-  const t = tripById(b.tripId), d = user(t?.driverId); if (!t) return '';
+  const t = tripById(b.tripId), d = tripDriver(t); if (!t) return '';
   const rated = db.reviews.some(r => r.bookingId === b.id && r.from === me.id);
   const unread = db.messages.filter(m => m.bookingId === b.id && m.from !== me.id && !(m.readBy || []).includes(me.id)).length;
   const live = ['confirmed', 'picked'].includes(b.status), parcel = b.type === 'parcel';
@@ -1068,7 +1177,7 @@ const placeOptions = sel => PROVS.map(p => `<optgroup label="${esc(p)}">${towns(
 function quickPost() {
   const last = db.trips.filter(t => t.driverId === me.id).sort((a, b) => b.created - a.created)[0];
   const from = last ? last.toProv + '|' + last.toTown : VENDA + '|Thohoyandou', to = last ? last.fromProv + '|' + last.fromTown : 'Gauteng|Johannesburg CBD';
-  const [fp, ft] = from.split('|'), [tp, tt] = to.split('|'), r = routeSync(coord(fp, ft), coord(tp, tt)), v = me.vehicle || {};
+  const [fp, ft] = from.split('|'), [tp, tt] = to.split('|'), r = routeSync(coord(fp, ft), coord(tp, tt)), lastCar = last?.car === 2 && car2Ready(me) ? 2 : 1, v = myCar(lastCar);
   const days = Array.from({ length: 7 }, (_, i) => addDays(i));
   return `<form id="quickForm" class="card pad-lg qpost">
     <div class="row between wrapx"><div><span class="eyebrow">${ic('bolt', 'sm')} Quick post</span><h3>I'm leaving…</h3></div><a href="#/post" class="small b">More options →</a></div>
@@ -1079,6 +1188,7 @@ function quickPost() {
       <div class="field"><label>Leaving at</label><input type="time" name="time" value="05:00" required></div>
       <div class="field"><label>Price / seat (R)</label><input type="number" name="price" min="50" max="3000" step="10" value="${suggestPrice(r.km)}" required></div>
       <div class="field"><label>Seats</label><input type="number" name="seats" min="1" max="${v.seats || 4}" value="${Math.min(4, v.seats || 4)}" required></div>
+      ${carSelect(lastCar)}
     </div>
     <div class="row wrapx between"><span class="xs muted" id="qpInfo">${Math.round(r.km)} km · ${fmtDur(r.min)} · suggested ${R(suggestPrice(r.km))}/seat · you keep ${Math.round((1 - (me.pro ? FEES.pro : FEES.commission)) * 100)}%</span><button class="btn btn-accent">${ic('send', 'sm')} Post it</button></div>
   </form>`;
@@ -1127,11 +1237,11 @@ function driverDash(q) {
     <a class="kpi dark" href="#/dashboard?tab=earn" style="color:#fff"><span class="ic">${ic('wallet')}</span><b>${R(earned)}</b><span>Earned, all time · see earnings ›</span></a>
     <div class="kpi"><span class="ic">${ic('ticket')}</span><b>${R(expected)}</b><span>Confirmed, coming</span></div>
     <div class="kpi"><span class="ic" style="background:var(--accent-50);color:#8a5a00">${ic('bell')}</span><b>${pending}</b><span>Requests waiting</span></div>
-    <div class="kpi ${w.balance < 0 ? 'neg' : ''}"><span class="ic">${ic('wallet')}</span><b>${R(w.balance)}</b><span>Wallet balance</span></div>
+    ${FEES_ON ? `<div class="kpi ${w.balance < 0 ? 'neg' : ''}"><span class="ic">${ic('wallet')}</span><b>${R(w.balance)}</b><span>Wallet balance</span></div>` : `<div class="kpi"><span class="ic">${ic('check')}</span><b>100%</b><span>You keep every fare</span></div>`}
   </div>
-  ${tab === 'trips' && me.status === 'verified' ? (w.balance < 0 ? `<div class="banner bad">${ic('wallet')}You owe ${R(-w.balance)} in fees. Top up to post new trips.<button class="btn btn-sm" data-act="tab" data-t="wallet">Open wallet</button></div>` : quickPost()) : ''}
-  ${tabsHTML(tab, [['earn', 'Earnings'], ['trips', `Upcoming (${upcoming.length})`], ['past', 'Past'], ['req', `Riders looking (${reqs.length})`], ['wallet', 'Wallet & payouts']])}
-  ${tab === 'earn' ? earningsView(q) : tab === 'wallet' ? wallet : tab === 'req' ? reqGroupsHTML(reqs)
+  ${tab === 'trips' && me.status === 'verified' ? (FEES_ON && w.balance < 0 ? `<div class="banner bad">${ic('wallet')}You owe ${R(-w.balance)} in fees. Top up to post new trips.<button class="btn btn-sm" data-act="tab" data-t="wallet">Open wallet</button></div>` : quickPost()) : ''}
+  ${tabsHTML(tab, [['earn', 'Earnings'], ['trips', `Upcoming (${upcoming.length})`], ['past', 'Past'], ['req', `Riders looking (${reqs.length})`]].concat(FEES_ON ? [['wallet', 'Wallet & payouts']] : []))}
+  ${tab === 'earn' ? earningsView(q) : tab === 'wallet' && FEES_ON ? wallet : tab === 'req' ? reqGroupsHTML(reqs)
   : (tab === 'past' ? past : upcoming).map(tripBlock).join('') || empty('car', tab === 'past' ? 'No past trips' : 'No upcoming trips', me.status === 'verified' ? 'Going home soon? Use “I\'m leaving…” above.' : 'Get verified first, then post trips.')}`;
 }
 
@@ -1195,7 +1305,7 @@ function earningsView(q) {
 /* ---------- Editing a posted trip ---------- */
 const canEditTrip = t => t.status === 'open' && t.date >= today() && !db.bookings.some(b => b.tripId === t.id && ['picked', 'completed'].includes(b.status));
 function editTripSheet(t) {
-  const v = me.vehicle || {}, booked = seatsTaken(t), active = db.bookings.filter(b => b.tripId === t.id && ['requested', 'confirmed'].includes(b.status));
+  const v = carOf(t), booked = seatsTaken(t), active = db.bookings.filter(b => b.tripId === t.id && ['requested', 'confirmed'].includes(b.status));
   const r = routeSync(coord(t.fromProv, t.fromTown), coord(t.toProv, t.toTown));
   modal(`${sheetHead('Edit trip', `${esc(short(t.fromTown))} → ${esc(short(t.toTown))}`)}
   ${active.length ? `<div class="note new" style="margin-bottom:14px">${ic('info')}<span class="small"><b>${active.length} rider${active.length === 1 ? '' : 's'} already booked.</b> They keep the price they agreed to. If you change the day or time, they get a message and can cancel for a full refund.</span></div>` : ''}
@@ -1242,7 +1352,7 @@ function riderSheet(b) {
 function driverBooking(b) {
   const r = user(b.riderId), rated = db.reviews.some(x => x.bookingId === b.id && x.from === me.id), parcel = b.type === 'parcel';
   const unread = db.messages.filter(m => m.bookingId === b.id && m.from !== me.id && !(m.readBy || []).includes(me.id)).length;
-  const money = b.pay === 'online' ? `Paid online · <b>${R(b.driverNet)}</b> to you after drop off` : `Collect <b>${R(b.total)}</b> cash · ${R(b.commission + b.riderFee)} from wallet`;
+  const money = b.pay === 'online' ? `Paid online · <b>${R(b.driverNet)}</b> to you after drop off` : `Collect <b>${R(b.total)}</b> cash${FEES_ON ? ` · ${R(b.commission + b.riderFee)} from wallet` : ''}`;
   return `<div class="card bk" style="box-shadow:none"><div class="bk-status ${b.status}"></div>
     <div class="bk-top"><div class="row">${avatar(r)}<div><b class="small">${esc(riderInfoOpen(b) === 'open' ? r.name : shortName(r))}</b><div class="row wrapx" style="gap:6px">${rateHTML(r.id)}${verifiedBadge(r)}</div></div></div>${statusBadge(b.status)}</div>
     <div class="bk-mid">
@@ -1309,12 +1419,12 @@ V.post = q => {
       <div class="card-title" style="margin-top:12px">${ic('wallet')}<h3>Your prices</h3></div>
       <div class="grid g3"><div class="field"><label>Price per seat (R)</label><input type="number" name="price" min="50" max="3000" step="10" required value="${suggestPrice(r.km)}"></div><div class="field"><label>Extra large bag fee (R)</label><input type="number" name="bagFee" min="0" step="10" value="50"></div><div class="field"><label>Parcel price (R), 0 for none</label><input type="number" name="parcelPrice" min="0" step="10" value="150"></div></div>
       <div class="grid g2"><div class="field"><label>Bags allowed per rider</label><select name="maxBags">${[1, 2, 3, 4].map(n => `<option ${n === 2 ? 'selected' : ''}>${n}</option>`).join('')}</select></div>
-      <div class="field"><label>Payments</label><label class="check" style="margin-top:8px"><input type="checkbox" name="acceptsCash" ${me.acceptsCash !== false ? 'checked' : ''}> Also accept cash at pickup <span class="xs muted">(fee comes off your wallet)</span></label><div class="hint">In app payments are always on, held until drop off, paid out every Tuesday.</div></div></div>
+      <div class="field"><label>Payments</label><label class="check" style="margin-top:8px"><input type="checkbox" name="acceptsCash" ${me.acceptsCash !== false ? 'checked' : ''}> Also accept cash at pickup ${FEES_ON ? '<span class="xs muted">(fee comes off your wallet)</span>' : ''}</label><div class="hint">In app payments are always on, held until drop off, paid out every Tuesday.</div></div></div>
       <div class="card-title" style="margin-top:8px">${ic('sliders')}<h3>Trip rules & comfort</h3></div>
       <div class="togs">${['No smoking', 'No alcohol', 'Seatbelts on', 'Stops every 2 hours', 'Aircon', 'Charging ports', 'Big boot', 'Pets allowed'].map((x, i) => `<label class="tog"><input type="checkbox" name="rules" value="${x}" ${i < 3 ? 'checked' : ''}><span>${x}</span></label>`).join('')}</div>
       ${me.gender === 'Female' ? `<label class="check" style="margin-top:14px"><input type="checkbox" name="womenOnly"> Women only trip (only female riders can book)</label>` : ''}
       <div class="field" style="margin-top:16px"><label>Notes for riders</label><textarea name="notes" placeholder="e.g. We stop at Polokwane Engen for 15 min."></textarea></div>
-      <div class="row" style="margin-bottom:16px;background:#fafcfb;border-radius:14px;padding:10px 14px">${carSVG(v, 'max-width:110px')}<div><b class="small">${esc(v.colour)} ${esc(v.make)}</b><div><span class="plate">${esc(v.reg)}</span></div></div></div>
+      ${car2Ready(me) ? carSelect(1) : `<input type="hidden" name="car" value="1"><div class="row" style="margin-bottom:16px;background:#fafcfb;border-radius:14px;padding:10px 14px">${carSVG(v, 'max-width:110px')}<div><b class="small">${esc(v.colour)} ${esc(v.make)}</b><div><span class="plate">${esc(v.reg)}</span></div><a class="xs b" href="#/verify?cars=1">${me.vehicle2 ? 'Second car: waiting for approval' : '+ Add a second car'}</a></div></div>`}
       <button class="btn btn-accent btn-block btn-lg">Publish trip</button>
     </form>
   </div>`;
@@ -1323,7 +1433,7 @@ V.post = q => {
 V.live = id => {
   const b = bookingById(id);
   if (!b || !me || (me.id !== b.riderId && me.id !== tripById(b.tripId)?.driverId)) return `<div class="wrap page">${empty('lock', 'Trip not available', 'Log in with the rider or driver account for this trip.', '<a class="btn" href="#/dashboard">My trips</a>')}</div>`;
-  const t = tripById(b.tripId), d = user(t.driverId), r = user(b.riderId), other = me.id === d.id ? r : d;
+  const t = tripById(b.tripId), d = tripDriver(t), r = user(b.riderId), other = me.id === d.id ? r : d;
   afterRender.push(() => mountLive(b));
   return `<div class="live"><div id="liveMap" class="map tall"></div>
     <div class="live-sheet">
@@ -1377,12 +1487,12 @@ let logF = { q: '', status: 'all', type: 'all', dir: 'all', period: '30' };
 function logRows() {
   const since = logF.period === 'all' ? 0 : Date.now() - +logF.period * 864e5, q = logF.q.trim().toLowerCase();
   return db.bookings.map(b => ({ b, t: tripById(b.tripId) })).filter(({ b, t }) => t && (logF.status === 'all' || (logF.status === 'active' ? ACTIVE.includes(b.status) : b.status === logF.status)) && (logF.type === 'all' || b.type === logF.type) && (logF.dir === 'all' || dirOf(t) === logF.dir)
-    && (!q || [user(b.riderId)?.name, user(t.driverId)?.name, t.fromTown, t.toTown, b.id, user(t.driverId)?.vehicle?.reg].join(' ').toLowerCase().includes(q)) && (logF.period === 'all' || depTime(t) >= since || ACTIVE.includes(b.status)))
+    && (!q || [user(b.riderId)?.name, user(t.driverId)?.name, t.fromTown, t.toTown, b.id, carOf(t).reg].join(' ').toLowerCase().includes(q)) && (logF.period === 'all' || depTime(t) >= since || ACTIVE.includes(b.status)))
     .sort((x, y) => depTime(y.t) - depTime(x.t));
 }
 function logBody() {
   const rows = logRows();
-  return [rows.length, rows.slice(0, 200).map(({ b, t }) => { const r = user(b.riderId), d = user(t.driverId); return `<tr data-act="bk" data-id="${b.id}"><td><b>${fmtDate(t.date)}</b><br><span class="xs muted">${esc(t.time)}</span></td><td><div class="row">${avatar(r, 'sm')}<span>${esc(r.name)}</span></div></td><td><span>${esc(d.name)}</span><br><span class="xs muted">${esc(d.vehicle.reg)}</span></td><td><b>${esc(short(t.fromTown))} → ${esc(short(t.toTown))}</b></td><td>${b.type === 'parcel' ? '📦 Parcel' : b.seats + ' seat' + (b.seats > 1 ? 's' : '')}</td><td><b>${R(b.total)}</b><br><span class="xs muted">${b.pay === 'online' ? b.payMethod : 'Cash'}</span></td><td>${statusBadge(b.status)}</td></tr>`; }).join('') || `<tr><td colspan="7" class="muted" style="text-align:center;padding:30px">No trips match these filters.</td></tr>`];
+  return [rows.length, rows.slice(0, 200).map(({ b, t }) => { const r = user(b.riderId), d = tripDriver(t); return `<tr data-act="bk" data-id="${b.id}"><td><b>${fmtDate(t.date)}</b><br><span class="xs muted">${esc(t.time)}</span></td><td><div class="row">${avatar(r, 'sm')}<span>${esc(r.name)}</span></div></td><td><span>${esc(d.name)}</span><br><span class="xs muted">${esc(d.vehicle.reg)}</span></td><td><b>${esc(short(t.fromTown))} → ${esc(short(t.toTown))}</b></td><td>${b.type === 'parcel' ? '📦 Parcel' : b.seats + ' seat' + (b.seats > 1 ? 's' : '')}</td><td><b>${R(b.total)}</b><br><span class="xs muted">${b.pay === 'online' ? b.payMethod : 'Cash'}</span></td><td>${statusBadge(b.status)}</td></tr>`; }).join('') || `<tr><td colspan="7" class="muted" style="text-align:center;padding:30px">No trips match these filters.</td></tr>`];
 }
 V.admin = q => {
   if (me?.role !== 'admin') return `<div class="wrap page"><div class="banner bad">Admins only.</div></div>`;
@@ -1429,14 +1539,14 @@ V.admin = q => {
     const chk = (ok, l) => `<li class="${ok ? 'ok' : 'bad'}">${ic(ok ? 'check' : 'x', 'sm')} ${l}</li>`;
     const soon = d => d && d <= addDays(60);
     const expiring = db.users.filter(u => u.role === 'driver' && u.status === 'verified' && (soon(u.licenceExpiry) || soon(u.prdpExpiry) || soon(u.vehicle?.discExpiry)));
-    body = `<h3 style="margin:4px 0 12px">Waiting for review (${pending.length})</h3><div class="grid g2">${pending.map(vcardHTML).join('') || empty('check', 'All caught up', 'No documents waiting for review.')}</div>
+    body = `<h3 style="margin:4px 0 12px">Waiting for review (${pending.length})</h3><div class="grid g2">${pending.map(vcardHTML).join('') || empty('check', 'All caught up', 'No documents waiting for review.')}</div>${car2Reviews()}
       <h3 style="margin:26px 0 12px">Documents expiring within 60 days</h3>
       <div class="card table-wrap"><table><tr><th>Driver</th><th>Licence</th><th>PrDP</th><th>Licence disc</th></tr>${expiring.map(u => `<tr data-act="userSheet" data-id="${u.id}"><td>${esc(u.name)}</td>${[u.licenceExpiry, u.prdpExpiry, u.vehicle?.discExpiry].map(d => `<td>${soon(d) ? `<span class="badge b-accent">${esc(d)}</span>` : esc(d)}</td>`).join('')}</tr>`).join('') || '<tr><td colspan="4" class="muted">Nothing expiring soon.</td></tr>'}</table></div>`;
   }
   if (tab === 'users') {
-    const role = q.role || 'all', list = db.users.filter(u => u.role !== 'admin' && (role === 'all' || u.role === role));
+    const role = q.role || 'all', list = db.users.filter(u => u.role !== 'admin' && (role === 'del' ? u.deleteRequested && u.status !== 'deleted' : role === 'all' || u.role === role));
     const last = u => db.bookings.filter(b => b.status === 'completed' && (b.riderId === u.id || tripById(b.tripId)?.driverId === u.id)).sort((a, b) => b.doneAt - a.doneAt)[0];
-    body = `<div class="filters">${[['all', 'Everyone'], ['rider', 'Riders'], ['driver', 'Drivers']].map(([k, l]) => `<a class="chip ${role === k ? 'on' : ''}" href="#/admin?tab=users&role=${k}">${l}</a>`).join('')}</div>
+    body = `<div class="filters">${[['all', 'Everyone'], ['rider', 'Riders'], ['driver', 'Drivers'], ['del', `Delete requests (${db.users.filter(u => u.deleteRequested && u.status !== 'deleted').length})`]].map(([k, l]) => `<a class="chip ${role === k ? 'on' : ''}" href="#/admin?tab=users&role=${k}">${l}</a>`).join('')}</div>
     <div class="card table-wrap"><table><tr><th>Name</th><th>Role</th><th>Status</th><th>Trips</th><th>Last trip</th><th>Rating</th></tr>${list.map(u => { const l = last(u), lt = l && tripById(l.tripId); return `<tr data-act="userSheet" data-id="${u.id}"><td><div class="row">${avatar(u, 'sm')}<span>${esc(u.name)}<br><span class="xs muted">${esc(u.phone)}</span></span></div></td><td>${u.role}</td><td>${verifiedBadge(u)}</td><td>${tripsDone(u.id)}</td><td>${lt ? `${esc(short(lt.fromTown))} → ${esc(short(lt.toTown))}<br><span class="xs muted">${fmtDate(lt.date)}</span>` : '<span class="muted">None</span>'}</td><td>${rateHTML(u.id)}</td></tr>`; }).join('')}</table></div>`;
   }
   if (tab === 'safety') {
@@ -1468,7 +1578,7 @@ V.admin = q => {
       </div></div>`;
   }
   return `<div class="wrap page">
-    <div class="dash-head"><div><span class="eyebrow">${ic('shield', 'sm')} Trip To Venda team</span><h2 style="margin:0">Control room</h2><p class="muted small">Every trip, who took it, where to, the money and safety, in one place.</p></div></div>
+    <div class="dash-head"><div><span class="eyebrow">${ic('shield', 'sm')} Trip To Venda team</span><h2 style="margin:0">Admin · Trip To Venda</h2><p class="muted small">Every trip, who took it, where to, the money and safety, in one place.</p></div></div>
     <div class="ctrl-bar">${tabs}<div class="ctrl-ref"><span class="xs muted" id="ctrlAt">${window.Cloud?.on ? 'Live · ' + new Date(Cloud.lastData || Date.now()).toLocaleTimeString('en-ZA', { hour: '2-digit', minute: '2-digit' }) : ''}</span><button class="btn btn-ghost" data-act="ctrlRefresh" title="Reload everything from the server">${ic('flip', 'sm')} Refresh</button></div></div>${body}</div>`;
 };
 function mountRouteVolume(routes) {
@@ -1507,7 +1617,7 @@ function autoChecks(u) {
   return [list.filter(Boolean).length, list.length];
 }
 function bkSheet(id) {
-  const b = bookingById(id), t = tripById(b.tripId), r = user(b.riderId), d = user(t.driverId);
+  const b = bookingById(id), t = tripById(b.tripId), r = user(b.riderId), d = tripDriver(t);
   const tl = [['Booked', b.created], ['Picked up', b.pickedAt], ['Arrived', b.doneAt]].filter(x => x[1]);
   modal(`${sheetHead(`${esc(short(t.fromTown))} → ${esc(short(t.toTown))}`, `${fmtDate(t.date)} · ${esc(t.time)} · ref ${b.id.toUpperCase()}`)}
     <div class="row between" style="margin-bottom:12px">${statusBadge(b.status)}${payBadge(b)}</div>
@@ -1524,7 +1634,8 @@ function userSheet(id) {
     <div class="row wrapx" style="gap:8px;margin-bottom:12px">${verifiedBadge(u)}${rateHTML(u.id)}${idc?.ok ? `<span class="badge b-grey">Age ${idc.age}</span>` : ''}${u.vehicle ? `<span class="plate">${esc(u.vehicle.reg)}</span>` : ''}</div>
     ${u.role === 'driver' ? `<p class="small muted" style="margin-bottom:10px">${esc(u.vehicle.colour)} ${esc(u.vehicle.make)} (${vLabel(u.vehicle)}) · licence exp. ${niceD(u.licenceExpiry)} · PrDP exp. ${niceD(u.prdpExpiry)} · wallet ${R(u.wallet?.balance || 0)}</p>` : ''}
     <div class="step-label" style="margin-bottom:6px">Trip history (${hist.length})</div>
-    <div style="max-height:46vh;overflow:auto">${hist.map(b => { const t = tripById(b.tripId); return `<div class="sum-row" data-act="bk" data-id="${b.id}" style="cursor:pointer"><span><b>${esc(short(t.fromTown))} → ${esc(short(t.toTown))}</b><br><span class="xs">${fmtDate(t.date)} · ${u.role === 'driver' ? esc(user(b.riderId).name) : 'with ' + esc(user(t.driverId).name)} · ${b.type === 'parcel' ? 'parcel' : b.seats + ' seat(s)'}</span></span><b>${R(u.role === 'driver' ? b.driverNet : b.total)}</b></div>`; }).join('') || '<p class="muted small">No completed trips yet.</p>'}</div>`);
+    <div style="max-height:46vh;overflow:auto">${hist.map(b => { const t = tripById(b.tripId); return `<div class="sum-row" data-act="bk" data-id="${b.id}" style="cursor:pointer"><span><b>${esc(short(t.fromTown))} → ${esc(short(t.toTown))}</b><br><span class="xs">${fmtDate(t.date)} · ${u.role === 'driver' ? esc(user(b.riderId).name) : 'with ' + esc(user(t.driverId).name)} · ${b.type === 'parcel' ? 'parcel' : b.seats + ' seat(s)'}</span></span><b>${R(u.role === 'driver' ? b.driverNet : b.total)}</b></div>`; }).join('') || '<p class="muted small">No completed trips yet.</p>'}</div>
+    ${u.status === 'deleted' ? '<p class="small muted" style="margin-top:12px">This account was deleted.</p>' : `${u.deleteRequested ? `<div class="banner warn" style="margin-top:12px">${ic('info')}<span>Asked to delete their account on ${new Date(u.deleteRequested).toLocaleDateString('en-ZA', { day: 'numeric', month: 'short' })}.</span></div>` : ''}<button class="btn btn-danger btn-block" style="margin-top:12px" data-act="delUser" data-id="${u.id}">${ic('close', 'sm')} Delete account</button>`}`);
 }
 
 /* ---------------- Departures board: drivers' "I'm leaving" posts ---------------- */
@@ -1532,7 +1643,7 @@ const depTime = t => new Date(t.date + 'T' + t.time).getTime();
 function leavesIn(t) { const m = Math.round((depTime(t) - Date.now()) / 60000); if (m <= 0) return 'leaving now'; if (m < 60) return `leaves in ${m} min`; if (m < 1440) return `leaves in ${Math.floor(m / 60)}h ${String(m % 60).padStart(2, '0')}m`; const d = Math.round(m / 1440); return `leaves in ${d} day${d > 1 ? 's' : ''}`; }
 function tripLink(t) { return EMBED ? 'triptovenda.co.za/trip/' + t.id : location.href.split('#')[0] + '#/trip/' + t.id; }
 function postText(t) {
-  const d = user(t.driverId);
+  const d = tripDriver(t);
   return `🚗 LEAVING ${t.fromTown.toUpperCase()} ➜ ${t.toTown.toUpperCase()}\n📅 ${fmtDate(t.date)} · ${t.time} (arrive ±${arrival(t)})\n💺 ${seatsLeft(t)} seats · ${R(t.price)} per seat${t.parcelPrice ? `\n📦 Parcels ${R(t.parcelPrice)}` : ''}\n🚪 Door to door: ${t.pickupArea || t.fromTown}\n✅ ID verified driver · ${d.vehicle.colour} ${d.vehicle.make} (${vLabel(d.vehicle).toLowerCase()})\nBook on Trip To Venda 👉 ${tripLink(t)}`;
 }
 let boardTimer;
@@ -1546,7 +1657,7 @@ V.board = q => {
   return `<div class="wrap page">
     <div class="page-head row between wrapx"><div><span class="eyebrow">${ic('clock', 'sm')} Live departures</span><h2>Who's leaving soon</h2><p>Drivers post when they're leaving, what time and the price. Grab a seat before it's gone.</p></div>${me?.role === 'driver' ? `<a class="btn btn-accent" href="#/dashboard">${ic('send', 'sm')} Post “I'm leaving”</a>` : ''}</div>
     <div class="filters">${chips.map(([k, l]) => `<a class="chip ${f === k ? 'on' : ''}" href="#/board?f=${k}">${l}</a>`).join('')}</div>
-    <div class="board">${list.map(t => { const d = user(t.driverId), left = seatsLeft(t); return `<article class="post">
+    <div class="board">${list.map(t => { const d = tripDriver(t), left = seatsLeft(t); return `<article class="post">
       <div class="row">${avatar(d)}<div style="min-width:0"><b>${esc(d.name)}</b> <span class="muted small">is leaving</span>${d.pro ? ' <span class="badge b-dark">PRO</span>' : ''}<div class="xs muted">${rateHTML(d.id)} · posted ${ago(t.created)}</div></div><span class="leave ml-auto" data-leaves="${t.id}">${leavesIn(t)}</span></div>
       <a class="post-route" href="#/trip/${t.id}"><div><small>${esc(short(t.fromProv))}</small><b>${esc(short(t.fromTown))}</b></div><span>${ic('right')}</span><div><small>${esc(t.toProv)}</small><b>${esc(short(t.toTown))}</b></div></a>
       <div class="post-facts"><div><small>When</small><b>${t.date === t0 ? 'Today' : t.date === t1 ? 'Tomorrow' : fmtDate(t.date)} · ${esc(t.time)}</b></div><div><small>Price</small><b>${R(t.price)}<span class="xs muted">/seat</span></b></div><div><small>Seats</small><b>${left} left</b></div></div>
@@ -1583,7 +1694,7 @@ V.parcel = q => {
 /* ---------------- Live location sharing with a loved one ---------------- */
 function trackLink(code) { return EMBED ? 'triptovenda.co.za/t/' + code : location.href.split('#')[0] + '#/track/' + code; }
 function openShare(id) {
-  const b = bookingById(id), t = tripById(b.tripId), d = user(t.driverId), parcel = b.type === 'parcel';
+  const b = bookingById(id), t = tripById(b.tripId), d = tripDriver(t), parcel = b.type === 'parcel';
   if (b.share?.active) {
     const text = shareText(b);
     return modal(`${sheetHead('Live location is on', `Shared with ${esc(b.share.name)} · since ${new Date(b.share.at).toLocaleTimeString('en-ZA', { hour: '2-digit', minute: '2-digit' })}`)}
@@ -1600,7 +1711,7 @@ function openShare(id) {
       <button class="btn btn-accent btn-block btn-lg">${ic('nav', 'sm')} Start sharing</button></form>`);
 }
 function shareText(b) {
-  const t = tripById(b.tripId), d = user(t.driverId);
+  const t = tripById(b.tripId), d = tripDriver(t);
   return `📍 Follow my trip live on Trip To Venda:\n${b.share ? trackLink(b.share.code) : ''}\n\n${b.type === 'parcel' ? 'Parcel' : 'Trip'}: ${t.fromTown} → ${t.toTown}\nDeparts: ${fmtDate(t.date)} at ${t.time} (arrives ±${arrival(t)})\nDriver: ${d.name} (ID verified) · ${d.phone}\nCar: ${d.vehicle.colour} ${d.vehicle.make}, plate ${d.vehicle.reg}\nRef: ${b.id.toUpperCase()}`;
 }
 V.track = code => {
@@ -1608,7 +1719,7 @@ V.track = code => {
   if (window.Cloud?.on && (!b || !tripById(b.tripId)) && !Cloud.trackMissing(code)) { Cloud.loadTrack(code); return `<div class="wrap page">${empty('nav', 'Opening the live trip…', 'One moment, connecting.', '')}</div>`; }
   if (!b || !b.share.active) return `<div class="wrap page">${empty('lock', 'This trip is no longer being shared', b?.status === 'completed' ? 'They arrived safely ✔, sharing switched off automatically.' : 'The traveller stopped sharing, or the link is wrong.', '<a class="btn" href="#/">Trip To Venda home</a>')}</div>`;
   const t = tripById(b.tripId);
-  let d = user(t.driverId), r = user(b.riderId);
+  let d = tripDriver(t), r = user(b.riderId);
   if (window.Cloud?.on) { r = { ...(r || { name: b.share.name ? 'Your traveller' : 'Traveller' }), phone: b.share.riderPhone || r?.phone || '' }; d = { ...d, vehicle: { ...(d?.vehicle || {}), reg: b.share.plate || d?.vehicle?.reg || '' } }; }
   else { db.tour = db.tour || {}; db.tour.track = true; save(); }
   afterRender.push(() => mountLive(b, true));
@@ -1679,22 +1790,27 @@ V.rules = q => {
       ${sec('Women only trips', `<p>Female drivers may offer trips that only female riders can book. Gender is taken from the registration details and checked against ID.</p>`)}
       ${sec('What happens if rules are broken', li(['A warning, a temporary suspension, or a permanent ban, depending on how serious it is.', 'Serious matters (violence, theft, fraud, sexual misconduct) are reported to SAPS, and we cooperate with lawful requests from the police.']))}`,
     drivers: `${sec('Only trips you are making yourself', li(['Only post trips <b>you are actually making</b>, on a date and time <b>you choose</b>. Trip To Venda never assigns trips, routes or shifts.', 'All passengers must be <b>booked through the app before the trip</b>. Do not pick up anyone who did not book.', 'Do not roam, cruise or wait for passengers. Do not stand for hire.']))}
-      ${sec('No ranks, no touting', li(['Never load or offload at taxi ranks, taxi stops, bus terminals or holding areas, or anywhere a rider asks you to that is one.', 'Never tout, call or hoot for passengers on taxi routes or anywhere else.', 'No roof signs, taxi branding, stickers that say taxi, or meters on your vehicle.']))}
-      ${sec('Licences, vehicle and insurance', li(['Valid driver’s licence and <b>PrDP (category P)</b> at all times. Drivers must be 21 or older.', 'Any operating licence or permit the law requires for carrying passengers for payment is <b>your responsibility</b>.', 'Your vehicle must be roadworthy, licensed (valid disc) and insured. Passenger liability cover is strongly recommended.', 'Never carry more passengers than your vehicle is licensed for: up to 4 in a private car, up to 6 in a 7 seater.']))}
+      ${sec('Licences and vehicle', li(['Valid driver’s licence and <b>PrDP (category P)</b> at all times. Drivers must be 21 or older.', 'Any operating licence or permit the law requires for carrying passengers for payment is <b>your responsibility</b>.', 'Your vehicle must have a valid licence disc.', 'Never carry more passengers than your vehicle is licensed for: up to 4 in a private car, up to 6 in a 7 seater.']))}
+      ${sec('Your cars', li(['You can register up to two cars. <b>You must drive every trip yourself</b>, in either car. No one else may drive a trip posted on your account.', 'When you post, choose the car you are using. Riders see that car, its colour and its number plate, so always arrive in the car you chose.', 'A second car needs its own licence disc and a photo showing the plate, and our team approves it before you can use it.']))}
+      ${sec('Keep time', li(['Leave <b>within 15 minutes</b> of the departure time you posted. Plan your pickups so you can.', 'Send each rider an estimated pickup time in the chat the evening before, and tell them in the app if you are running more than 15 minutes late.']))}
       ${sec('Prices and money', li(['You set your own seat, bag and parcel prices. Keep them fair and as shown in the app.', 'Collect only the amount shown in the app. No extra charges on the road.', 'Fines, tolls, fuel, impoundment costs and penalties are your responsibility.']))}
       ${sec('Safety at pickup', li(['Check the rider’s face against their photo and ask for the PIN. Wrong PIN, don’t start.', 'Follow the road rules, keep to speed limits, and never drive tired, distracted or under the influence.']))}`,
-    terms: `${sec('1. Who we are and what we do', `<p>Trip To Venda ("we") runs a website and app that let riders find and book seats, and send parcels, on trips that independent drivers plan and offer. We provide the platform, verification, booking, messaging, tracking and safety tools. <b>We do not provide transport.</b> The agreement to travel is between the rider and the driver.</p>`)}
-      ${sec('2. Accounts', li(['You must be 18 or older, give true details and keep your password secret.', 'We may check your ID and documents, and we may decline, suspend or close accounts that break these terms, the community rules or the law.']))}
-      ${sec('3. Drivers are independent', li(['Drivers are not our employees, agents or contractors. They decide whether, when, where and at what price to travel.', 'Drivers confirm that they hold every licence, permit, insurance and roadworthy certificate the law requires, and they accept full responsibility for complying with transport, traffic and tax laws.', 'Drivers indemnify Trip To Venda against claims, fines and costs caused by their own failure to comply.']))}
-      ${sec('4. Fees and payments', li([`Riders pay the driver's price plus a booking fee of ${R(FEES.seat)} per seat (${R(FEES.parcel)} per parcel), shown before booking.`, `Drivers pay a platform fee of ${FEES.commission * 100}% per seat booking (${FEES.pro * 100}% with Pro, ${FEES.parcelCommission * 100}% for parcels). For cash trips the fee comes off the driver's wallet.`, 'Prices include everything shown at booking. No one may charge more on the road.']))}
-      ${sec('5. Cancellations', li(['Riders and drivers can cancel in the app. Please cancel as early as possible.', 'Repeated late cancellations or no shows may lead to suspension.']))}
-      ${sec('6. Parcels', `<p>Senders must describe parcels truthfully. No illegal, dangerous, perishable without notice, or prohibited goods. Drivers may refuse a parcel that does not match its description or photo.</p>`)}
-      ${sec('7. Our responsibility', `<p>We work hard to verify people and keep the platform safe, but we cannot control what happens on the road. To the extent the law allows, we are not liable for loss or damage caused by a driver, rider or third party. Nothing in these terms limits rights you have under the Consumer Protection Act or other South African law.</p>`)}
-      ${sec('8. Changes and law', `<p>We may update these terms and will show the new version in the app. South African law applies.</p>`)}
-      <p class="xs muted">Version ${POLICY_V}.</p>`,
+    terms: `<div class="pol-lead">${ic('file')}<p><b>The practical rules for every trip.</b> By creating an account you agree to these terms, the community rules and the privacy policy. They are short and clear on purpose, so everyone knows what to expect.</p></div>
+      ${sec('1. What Trip To Venda does', `<p>Trip To Venda runs a website and app where riders book seats, and send parcels, on trips that independent drivers are already making. We check people, handle bookings, messages, live tracking and safety tools. <b>We do not provide the transport.</b> The trip itself is an agreement between the rider and the driver.</p>`)}
+      ${sec('2. Your account', li(['You must be <b>18 or older</b> and use your <b>real name, photo, ID and cellphone number</b>. One person, one account.', 'Riders confirm their ID before their first trip. Drivers upload their ID, driving licence, PrDP, licence disc and car photos, and can only post trips once our team has <b>verified</b> them.', 'Keep your password private. You are responsible for everything done on your account.', 'Drivers may register <b>up to two cars</b> and must drive every trip themselves. When posting, the driver picks the car, and riders see that car and its number plate. A second car is checked by our team before it can be used.']))}
+      ${sec('3. Booking', li(['Every seat and parcel must be <b>booked in the app before the trip</b>. Drivers may not pick up anyone who did not book.', 'A booking is confirmed only when the driver <b>accepts</b> it. You then see the driver, the car, the number plate and your pickup PIN.', 'Enter your exact pickup and drop off addresses (home, work or a business). Not a taxi rank, taxi stop or bus terminal.', 'Booking for someone else? Put their name and cellphone number in the note so the driver can reach them.']))}
+      ${sec('4. We keep time', li(['The departure time on the trip is the time the car <b>leaves</b>. Drivers plan their pickups so they leave <b>within 15 minutes</b> of that time.', 'The evening before, the driver sends each rider an estimated pickup time in the app chat.', 'Riders are <b>ready at the pickup address 10 minutes before</b> that time. The driver waits up to <b>10 minutes</b> after arriving, then may mark a no show and leave.', 'A driver running more than 15 minutes late must tell riders in the app.']))}
+      ${sec('5. Pickup and the PIN', li(['Riders check the driver’s face, the car and the <b>number plate</b> against the app before getting in.', 'Drivers check the rider’s face against their photo and ask for the <b>4 digit PIN</b>. Wrong person or wrong PIN: the trip does not start.', 'Never share your PIN with anyone except your driver, at pickup.']))}
+      ${sec('6. Price and payment', li(['The driver sets the price per seat, extra large bag and parcel. The <b>total is shown before you book</b>.', 'For now riders pay the driver <b>in cash at pickup</b>. Have the exact amount ready.', '<b>No one may charge more on the road</b> than the total shown in the app. If it happens, do not pay extra, and report it through Help.', 'During launch there is <b>no booking fee</b> and drivers keep 100% of every fare. We will give at least 30 days’ notice in the app before any fee starts.']))}
+      ${sec('7. Cancellations and no shows', li(['<b>Riders:</b> cancel in the app as early as possible, at least <b>12 hours</b> before departure if you can.', '<b>Drivers:</b> cancel at least <b>24 hours</b> before departure, unless there is a real emergency. Riders are notified straight away and the trip shows as cancelled.']))}
+      ${sec('8. Parcels', li(['Describe the parcel truthfully and add a photo. Drivers may refuse a parcel that does not match.', 'Not allowed: cash, firearms, drugs, stolen goods, anything illegal or dangerous, and perishables unless the driver agrees in the chat first.', 'The receiver must be available at the drop off address and give the <b>6 digit delivery code</b>. The parcel is delivered only with the right code.']))}
+      ${sec('9. Reviews, reports and suspensions', li(['Rate your trip honestly after drop off.', 'Report a problem through Help within <b>48 hours</b>. Our Control room reviews every report.', 'Breaking these terms can lead to a warning, a pause, or a permanent ban. Crimes are reported to SAPS, and we help the police with lawful requests.']))}
+      ${sec('10. Our responsibility', `<p>We work hard to verify people and keep trips safe, but we cannot control what happens on the road. As far as the law allows, we are not liable for loss or damage caused by a driver, rider or someone else. Drivers are independent, hold their own licences and permits, and are responsible for complying with transport, traffic and tax laws. Nothing in these terms takes away your rights under the Consumer Protection Act or other South African law.</p>`)}
+      ${sec('11. Changes', `<p>We may update these terms and will show the new version in the app before it applies. South African law applies.</p>`)}
+      <p class="xs muted">Version ${POLICY_V}. Written in plain language. Not legal advice.</p>`,
     privacy: `${sec('What we collect and why', li(['<b>Account:</b> name, email, cellphone, gender, emergency contact, to run your account and keep trips safe.', '<b>Verification:</b> ID number and photo, selfie, and for drivers licence, PrDP, disc and car photos, to confirm who you are.', '<b>Trips:</b> bookings, pickup and drop off addresses, luggage photos, messages and live location during a trip, to deliver the service and help in an emergency.']))}
-      ${sec('Who can see it', li(['<b>Public:</b> your first name and initial, photo, rating and (for drivers) car make and colour.', '<b>The other person on your booking</b>: your full name, cellphone and (for drivers) number plate, only around the trip.', '<b>Our Control room</b>: verification documents and trip records, only for safety and support.', 'Family you share a trip with see the live trip until it ends. We never sell your information.']))}
-      ${sec('Your rights', li(['Ask to see, correct or delete your information, or object to how it is used, through Help in the app.', 'We keep trip and verification records only as long as needed for safety, disputes and the law, then delete them.', 'You may complain to the Information Regulator of South Africa.']))}
+      ${sec('Who can see it', li(['<b>Public:</b> your first name and initial, photo, rating and (for drivers) car make and colour.', '<b>The other person on your booking</b>: your full name, cellphone and (for drivers) number plate, only around the trip.', 'Family you share a trip with see the live trip until it ends. We never sell your information.']))}
+      ${sec('Your rights', li(['Ask to see or correct your information, or object to how it is used, through Help in the app.', '<b>Delete your account</b> any time: open <b>Profile & verification</b> and tap <b>Delete my account</b>. We remove your personal details, documents and login. Past trip records stay, without your name, for safety and the law.', 'We keep trip and verification records only as long as needed for safety, disputes and the law, then delete them.', 'You may complain to the Information Regulator of South Africa.']))}
       <p class="xs muted">Version ${POLICY_V}. Processed under the Protection of Personal Information Act (POPIA).</p>`
   };
   return `<div class="wrap page"><div class="page-head"><span class="eyebrow">${ic('file', 'sm')} Rules & policies</span><h2>How Trip To Venda works, and the rules everyone follows</h2><p>Plain language. Please read them before you book or drive.</p></div>
@@ -1831,6 +1947,7 @@ function actionParams() {
 }
 const leaveAction = hash => { history.replaceState(null, '', location.pathname + hash); render(); };
 function render() {
+  if (me && me.status === 'deleted') { if (window.Cloud?.on) Cloud.logout(); me = null; store.del('ttv_session'); toast('This account was deleted', 'err'); }
   const act = actionParams();
   let { name, args, q } = act ? { name: 'authAction', args: [], q: {} } : parse();
   if (window.Cloud?.needsProfile && !['complete', 'rules', 'authAction', 'track'].includes(name)) { name = 'complete'; args = []; }
@@ -1851,10 +1968,11 @@ function render() {
   // phones: tables turn into labelled cards (see .stack-m in styles.css)
   document.querySelectorAll('#app table').forEach(tb => { const rows = [...tb.rows], hr = rows.find(r => r.cells.length && [...r.cells].every(c => c.tagName === 'TH')); if (!hr) return; const h = [...hr.cells].map(x => x.textContent.trim()); tb.classList.add('stack-m'); hr.classList.add('th-row'); rows.forEach(tr => { if (tr !== hr) [...tr.cells].forEach((td, i) => { if (!td.dataset.label && td.colSpan < 2) td.dataset.label = h[i] || ''; }); }); });
 }
-const roleChip = () => { const r = me.role, lbl = r === 'driver' ? 'Driver' : r === 'admin' ? 'Control room' : 'Rider';
+const roleChip = () => { const r = me.role, lbl = r === 'driver' ? 'Driver' : r === 'admin' ? 'Admin' : 'Rider';
+  if (r === 'admin') return `<a href="#/admin" class="role-chip admin" title="You are logged in as Trip To Venda admin"><img src="img/emblem.webp" alt="" class="chip-logo"><span><b>Trip To Venda</b><small>${ic('shield', 'sm')}Admin</small></span></a>`;
   return `<a href="${r === 'admin' ? '#/admin' : '#/dashboard'}" class="role-chip ${r}" title="You are logged in as a ${lbl.toLowerCase()}">${avatar(me, 'sm')}<span><b>${esc(first(me.name))}</b><small>${ic(r === 'driver' ? 'car' : r === 'admin' ? 'shield' : 'user', 'sm')}${lbl}${r === 'admin' ? '' : ' section'}</small></span></a>`; };
 function updateNav(cur) {
-  const I = { home: ['#/', 'home', 'Home'], search: ['#/search', 'search', 'Trips'], board: ['#/board', 'clock', 'Leaving soon'], parcel: ['#/parcel', 'pkg', 'Parcels'], dashboard: ['#/dashboard', 'ticket', 'My trips'], admin: ['#/admin', 'users', 'Control room'], post: ['#/post', 'plus', 'Post'], how: ['#/how', 'bolt', 'How it works'], safety: ['#/safety', 'shield', 'Safety'], login: ['#/login', 'user', 'Log in'] };
+  const I = { home: ['#/', 'home', 'Home'], search: ['#/search', 'search', 'Trips'], board: ['#/board', 'clock', 'Leaving soon'], parcel: ['#/parcel', 'pkg', 'Parcels'], dashboard: ['#/dashboard', 'ticket', 'My trips'], admin: ['#/admin', 'users', 'Admin'], post: ['#/post', 'plus', 'Post'], how: ['#/how', 'bolt', 'How it works'], safety: ['#/safety', 'shield', 'Safety'], login: ['#/login', 'user', 'Log in'] };
   const role = me?.role || 'visitor';
   const desk = { visitor: ['home', 'search', 'board', 'parcel', 'how', 'safety'], rider: ['home', 'search', 'board', 'parcel', 'dashboard', 'how', 'safety'], driver: ['home', 'board', 'search', 'dashboard', 'post', 'safety'], admin: ['home', 'admin', 'board', 'search', 'safety'] }[role];
   const tabs = { visitor: ['home', 'search', 'board', 'parcel', 'login'], rider: ['home', 'search', 'board', 'parcel', 'dashboard'], driver: ['home', 'board', 'post', 'dashboard', 'safety'], admin: ['home', 'admin', 'board', 'search', 'safety'] }[role];
@@ -1873,10 +1991,10 @@ function updateNav(cur) {
 /* ---------------- Form handlers ---------------- */
 F.editTripForm = f => {
   const t = tripById(f.dataset.id); if (!t || t.driverId !== me.id || !canEditTrip(t)) return toast('This trip can no longer be edited', 'err');
-  const booked = seatsTaken(t), max = me.vehicle?.seats || 4, seats = +f.seats.value, price = +f.price.value;
+  const booked = seatsTaken(t), cv = carOf(t), max = cv.seats || 4, seats = +f.seats.value, price = +f.price.value;
   if (f.date.value < today()) return toast('Pick today or a later date', 'err');
   if (seats < Math.max(1, booked)) return toast(`${booked} seat(s) are already booked, you can't go lower than that`, 'err');
-  if (seats > max) return toast(`Your ${vLabel(me.vehicle).toLowerCase()} can take up to ${max} passengers`, 'err');
+  if (seats > max) return toast(`Your ${esc(cv.make || vLabel(cv).toLowerCase())} can take up to ${max} passengers`, 'err');
   if (!(price >= 50 && price <= 3000)) return toast('Price per seat must be between R50 and R3 000', 'err');
   if (RANK_RE.test(f.pickupArea?.value || '') || RANK_RE.test(f.dropArea?.value || '')) return toast(rankMsg, 'err');
   const before = { date: t.date, time: t.time, price: t.price, seats: t.seats, parcelPrice: t.parcelPrice };
@@ -1949,10 +2067,11 @@ F.postForm = f => {
   if (fp !== VENDA && tp !== VENDA) return toast('Trip To Venda trips must start or end in Venda', 'err');
   if (fp === tp && f.fromTown.value === f.toTown.value) return toast('Pick two different places', 'err');
   if (RANK_RE.test(f.pickupArea.value) || RANK_RE.test(f.dropArea.value)) return toast(rankMsg, 'err');
-  if ((me.wallet?.balance || 0) < 0) return toast('Your wallet is negative, top up first', 'err');
-  if (+f.seats.value > (me.vehicle?.seats || 4)) return toast(`Your ${vLabel(me.vehicle).toLowerCase()} can take up to ${me.vehicle?.seats || 4} passengers`, 'err');
+  if (FEES_ON && (me.wallet?.balance || 0) < 0) return toast('Your wallet is negative, top up first', 'err');
+  const car = carNo(f), cv = myCar(car);
+  if (+f.seats.value > (cv.seats || 4)) return toast(`Your ${esc(cv.make || vLabel(cv).toLowerCase())} can take up to ${cv.seats || 4} passengers`, 'err');
   const pick = n => [...f.querySelectorAll(`[name=${n}]:checked`)].map(x => x.value);
-  const t = { id: uid('t'), driverId: me.id, fromProv: fp, fromTown: f.fromTown.value, toProv: tp, toTown: f.toTown.value, pickupArea: f.pickupArea.value.trim(), dropArea: f.dropArea.value.trim(), date: f.date.value, time: f.time.value, arrive: f.arrive.value, seats: +f.seats.value, price: +f.price.value, bagFee: +f.bagFee.value || 0, parcelPrice: +f.parcelPrice.value || 0, maxBags: +f.maxBags.value, acceptsCash: !PAY_ONLINE || !!f.acceptsCash?.checked, rules: pick('rules'), womenOnly: !!f.womenOnly?.checked, notes: f.notes.value.trim(), status: 'open', created: Date.now() };
+  const t = { id: uid('t'), driverId: me.id, car, fromProv: fp, fromTown: f.fromTown.value, toProv: tp, toTown: f.toTown.value, pickupArea: f.pickupArea.value.trim(), dropArea: f.dropArea.value.trim(), date: f.date.value, time: f.time.value, arrive: f.arrive.value, seats: +f.seats.value, price: +f.price.value, bagFee: +f.bagFee.value || 0, parcelPrice: +f.parcelPrice.value || 0, maxBags: +f.maxBags.value, acceptsCash: !PAY_ONLINE || !!f.acceptsCash?.checked, rules: pick('rules'), womenOnly: !!f.womenOnly?.checked, notes: f.notes.value.trim(), status: 'open', created: Date.now() };
   db.trips.push(t);
   const told = db.requests.filter(r => r.fp === fp && r.tp === tp && (!r.date || r.date === t.date) && (!r.date || r.date >= today()));
   told.forEach(r => notify(r.riderId, `A driver just posted ${t.fromTown} → ${t.toTown} on ${fmtDate(t.date)}, matches your lift request!`, '#/trip/' + t.id));
@@ -2012,9 +2131,11 @@ function openRate(id) {
       <div class="field"><label>Comment (optional)</label><textarea name="text" placeholder="${me.role === 'driver' ? 'Was the rider on time and respectful?' : 'How was the driving, the car and the service?'}"></textarea></div>
       <button class="btn btn-block btn-lg">Submit rating</button></form>`);
 }
+const noteLink = n => { const l = String(n.link || ''); if (!/^#\//.test(l)) return me?.role === 'admin' ? '#/admin' : '#/dashboard'; return me?.role === 'admin' && l === '#/dashboard' ? '#/admin' : l; };
 function openNotes() {
   const notes = db.notes.filter(myNote).slice(-15).reverse();
-  modal(`${sheetHead('Notifications')}${notes.map(n => `<a href="${n.link}" class="note ${n.read ? '' : 'new'}" style="color:inherit" data-act="go">${ic('bell', 'sm')}<span><span class="small">${esc(n.text)}</span><br><span class="xs muted">${ago(n.at)}</span></span></a>`).join('') || `<div class="empty"><div class="ic">${ic('bell', 'lg')}</div><p>You're all caught up.</p></div>`}`);
+  modal(`<div class="notes-head"><img src="img/emblem.webp" alt="Trip To Venda"><div><b>Trip To Venda</b><span class="xs muted">Notifications</span></div><button class="icon-btn" data-act="close" aria-label="Close">${ic('close')}</button></div>
+    <div class="notes-list">${notes.map(n => `<a href="${esc(noteLink(n))}" class="note-item ${n.read ? '' : 'new'}" data-act="go"><img src="img/emblem.webp" alt=""><span><span class="small">${esc(n.text)}</span><span class="xs muted">${ago(n.at)}</span></span>${ic('right', 'sm')}</a>`).join('') || `<div class="empty"><div class="ic">${ic('bell', 'lg')}</div><p>You're all caught up.</p></div>`}</div>`);
   notes.forEach(n => n.read = true); save(); updateNav(parse().name);
 }
 async function copyText(t, msg) { try { await navigator.clipboard.writeText(t); toast(msg); } catch { toast('Copy not allowed here, select and copy the text', 'err'); } }
@@ -2028,7 +2149,7 @@ function waSheet(title, text, num, label) { modal(`${sheetHead(title)}<div class
 /* ---------------- Click actions ---------------- */
 const A = {
   close: closeModal,
-  go: el => { closeModal(); go(el.getAttribute('href')); },
+  go: el => { const h = el.getAttribute('href'); closeModal(); if (h && h[0] === '#') { go(h); render(); window.scrollTo(0, 0); } },
   back: () => back(),
   speed: el => { liveSpeed = +el.dataset.x; document.querySelectorAll('[data-act=speed]').forEach(b => b.classList.toggle('on', b === el)); },
   tab: el => { const p = parse(); go('#/' + p.name + '?tab=' + el.dataset.t); },
@@ -2095,6 +2216,7 @@ document.addEventListener('click', e => {
 document.addEventListener('change', async e => {
   const el = e.target, f = el.form;
   if (el.dataset.prov && f) f.querySelector(`[data-town="${el.dataset.prov}"]`).innerHTML = selectOpts(towns(el.value), '', f.id === 'searchForm' ? 'Any town' : '');
+  if (el.name === 'car' && f?.seats && el.selectedOptions) { const mx = +el.selectedOptions[0].dataset.seats || 4; f.seats.max = mx; if (+f.seats.value > mx) f.seats.value = mx; }
   if (f?.id === 'postForm' && /Prov|Town/.test(el.name)) {
     const r = await getRoute(coord(f.fromProv.value, f.fromTown.value), coord(f.toProv.value, f.toTown.value));
     $('#routeInfo span').innerHTML = `About <b>${Math.round(r.km)} km</b> · <b>${fmtDur(r.min)}</b> driving. Suggested price: <b>${R(suggestPrice(r.km) - 30)} to ${R(suggestPrice(r.km) + 40)}</b> per seat.`;
@@ -2162,6 +2284,7 @@ function completeBooking(b) {
   b.status = 'completed'; b.doneAt = Date.now();
   if (b.pay === 'online') { b.payStatus = 'released'; b.payout = 'pending'; }
   else if (window.Cloud?.on) b.payStatus = 'paid-cash';
+  else if (!FEES_ON) b.payStatus = 'paid-cash';
   else { b.payStatus = 'paid-cash'; d.wallet = d.wallet || { balance: 0, ledger: [] }; const fee = b.commission + b.riderFee; d.wallet.balance -= fee; d.wallet.ledger.push({ at: Date.now(), text: `Cash trip fee · ${short(t.fromTown)} → ${short(t.toTown)} (${first(user(b.riderId).name)})`, amount: -fee }); }
   if (b.share) b.share.active = false;
   notify(b.riderId, b.type === 'parcel' ? `Your parcel was delivered to ${b.recvName} ✔` : `You've arrived in ${t.toTown}. Please rate your driver ⭐`);
@@ -2173,15 +2296,16 @@ F.quickForm = f => {
   const [fp, ft] = f.from.value.split('|'), [tp, tt] = f.to.value.split('|');
   if (fp !== VENDA && tp !== VENDA) return toast('Trip To Venda trips must start or end in Venda', 'err');
   if (f.from.value === f.to.value) return toast('Pick two different places', 'err');
-  if ((me.wallet?.balance || 0) < 0) return toast('Top up your wallet first', 'err');
+  if (FEES_ON && (me.wallet?.balance || 0) < 0) return toast('Top up your wallet first', 'err');
   if (new Date(f.date.value + 'T' + f.time.value).getTime() < Date.now()) return toast('That time has already passed, pick a later time', 'err');
-  const t = { id: uid('t'), driverId: me.id, fromProv: fp, fromTown: ft, toProv: tp, toTown: tt, pickupArea: short(ft) + ' & surrounds, door to door', dropArea: short(tt) + ' & surrounds, door to door', date: f.date.value, time: f.time.value, arrive: '', seats: +f.seats.value, price: +f.price.value, bagFee: 50, parcelPrice: 150, maxBags: 2, acceptsCash: !PAY_ONLINE || (me.acceptsCash ?? true), rules: ['No smoking', 'Seatbelts on'], womenOnly: false, notes: '', status: 'open', created: Date.now(), quick: true };
+  const car = carNo(f), cv = myCar(car); if (+f.seats.value > (cv.seats || 4)) return toast(`Your ${esc(cv.make || vLabel(cv).toLowerCase())} can take up to ${cv.seats || 4} passengers`, 'err');
+  const t = { id: uid('t'), driverId: me.id, car, fromProv: fp, fromTown: ft, toProv: tp, toTown: tt, pickupArea: short(ft) + ' & surrounds, door to door', dropArea: short(tt) + ' & surrounds, door to door', date: f.date.value, time: f.time.value, arrive: '', seats: +f.seats.value, price: +f.price.value, bagFee: 50, parcelPrice: 150, maxBags: 2, acceptsCash: !PAY_ONLINE || (me.acceptsCash ?? true), rules: ['No smoking', 'Seatbelts on'], womenOnly: false, notes: '', status: 'open', created: Date.now(), quick: true };
   db.trips.push(t); notifyRequests(t); save(); render(); toast("Posted ✔ You're on the departures board"); openPostShare(t.id);
 };
 F.shareForm = f => {
   const b = bookingById(f.dataset.id);
   if (!f.name.value.trim() || !isSAphone(f.phone.value)) return toast('Add a name and a valid cellphone', 'err');
-  { const d = user(b.driverId || tripById(b.tripId)?.driverId); b.share = { code: uid('').slice(0, 10).toUpperCase(), name: f.name.value.trim(), phone: f.phone.value.replace(/\s/g, ''), at: Date.now(), active: true, riderPhone: me.phone || '', plate: d?.vehicle?.reg || '' }; }
+  { const d = tripDriver(tripById(b.tripId)); b.share = { code: uid('').slice(0, 10).toUpperCase(), name: f.name.value.trim(), phone: f.phone.value.replace(/\s/g, ''), at: Date.now(), active: true, riderPhone: me.phone || '', plate: d?.vehicle?.reg || '' }; }
   notify(tripById(b.tripId).driverId, `${first(me.name)} is sharing this trip's live location with family.`);
   save(); toast('Live location shared with ' + b.share.name); render(); openShare(b.id);
 };
@@ -2211,7 +2335,7 @@ Object.assign(A, {
   decline: el => { const b = bookingById(el.dataset.id), t = tripById(b.tripId); b.status = 'declined'; const rf = refund(b); notify(b.riderId, `The driver couldn't take your booking for ${t.fromTown} → ${t.toTown}.${rf} Try another trip.`, '#/search'); save(); toast('Declined' + (rf ? ' · rider refunded' : '')); render(); },
   cancelB: el => askConfirm('Cancel this booking?', 'The driver is notified and your seat is released. In app payments are refunded in full.', 'Cancel booking', () => { const b = bookingById(el.dataset.id), t = tripById(b.tripId); b.status = 'cancelled'; const rf = refund(b); if (b.share) b.share.active = false; notify(t.driverId, `${me.name} cancelled their booking for ${t.fromTown} → ${t.toTown} on ${fmtDate(t.date)}.`); save(); toast('Booking cancelled.' + rf); render(); }),
   cancelTrip: el => askConfirm('Cancel this whole trip?', 'All riders are notified and every in app payment is refunded in full.', 'Cancel trip', () => { const t = tripById(el.dataset.id); t.status = 'cancelled'; db.bookings.filter(b => b.tripId === t.id && ACTIVE.includes(b.status)).forEach(b => { b.status = 'cancelled'; const rf = refund(b); if (b.share) b.share.active = false; notify(b.riderId, `Sorry, the driver cancelled ${t.fromTown} → ${t.toTown} on ${fmtDate(t.date)}.${rf}`, '#/search'); }); save(); toast('Trip cancelled · riders refunded'); render(); }),
-  dropoff: el => { const b = bookingById(el.dataset.id); if (b.type === 'parcel') return modal(`${sheetHead('Enter the delivery code', `Ask ${esc(b.recvName)} for the 6 digit code`)}${TEST_MODE ? `<div class="note new" style="margin-bottom:12px">${ic('info')}<span class="small"><b>Test mode:</b> the code is <b>${b.deliveryCode}</b>. In real life the receiver reads it from the SMS.</span></div>` : ''}<form id="deliverForm" data-id="${b.id}"><input name="code" inputmode="numeric" maxlength="6" placeholder="••••••" style="font-size:2rem;text-align:center;letter-spacing:.4em;font-weight:800;padding:14px" required><br><br><button class="btn btn-block btn-lg">${ic('check', 'sm')} Hand over parcel</button></form>`); completeBooking(b); toast(b.pay === 'online' ? `Drop off done ✔ ${R(b.driverNet)} released to your next payout` : `Drop off done ✔ ${R(b.commission + b.riderFee)} fee taken from your wallet`); go('#/dashboard'); },
+  dropoff: el => { const b = bookingById(el.dataset.id); if (b.type === 'parcel') return modal(`${sheetHead('Enter the delivery code', `Ask ${esc(b.recvName)} for the 6 digit code`)}${TEST_MODE ? `<div class="note new" style="margin-bottom:12px">${ic('info')}<span class="small"><b>Test mode:</b> the code is <b>${b.deliveryCode}</b>. In real life the receiver reads it from the SMS.</span></div>` : ''}<form id="deliverForm" data-id="${b.id}"><input name="code" inputmode="numeric" maxlength="6" placeholder="••••••" style="font-size:2rem;text-align:center;letter-spacing:.4em;font-weight:800;padding:14px" required><br><br><button class="btn btn-block btn-lg">${ic('check', 'sm')} Hand over parcel</button></form>`); completeBooking(b); toast(b.pay === 'online' ? `Drop off done ✔ ${R(b.driverNet)} released to your next payout` : (FEES_ON ? `Drop off done ✔ ${R(b.commission + b.riderFee)} fee taken from your wallet` : 'Drop off done ✔')); go('#/dashboard'); },
   approve: el => { if (el.closest('#sheet') && ![...el.closest('#sheet').querySelectorAll('.mchk')].some(c => !c.checked)) closeModal(); const card = el.closest('.vcard'); if (card && [...card.querySelectorAll('.mchk')].some(c => !c.checked)) return toast('Tick every manual check first, confirm you looked at each document', 'err'); const u = user(el.dataset.id); u.status = 'verified'; notify(u.id, `✔ You're verified! ${u.role === 'driver' ? 'You can now post trips.' : 'You can now book trips.'}`); save(); toast(u.name + ' approved'); render(); },
   emailResend: async () => { try { await Cloud.resendVerify(); toast('Sent ✔ Check your inbox and spam folder'); } catch (e) { toast(Cloud.err(e), 'err'); } },
   emailDone: async () => { const ok = await Cloud.refreshVerify().catch(() => false); if (ok) { me.phoneVerified = true; save(); } toast(ok ? 'Email confirmed ✔' : 'Not confirmed yet. Open the link in the email first.', ok ? '' : 'err'); render(); },
@@ -2235,7 +2359,7 @@ Object.assign(A, {
   editTrip: el => { const t = tripById(el.dataset.id); if (!t || t.driverId !== me?.id) return; if (!canEditTrip(t)) return toast('This trip has started or passed, it can no longer be edited', 'err'); editTripSheet(t); },
   riderInfo: el => { const b = bookingById(el.dataset.id); if (!b || tripById(b.tripId)?.driverId !== me?.id) return; riderSheet(b); },
   earnCsv: el => { const rows = driverEarnRows(me.id, earnStart(el.dataset.p)); copyText(['Date,Time,From,To,Type,Seats,Payment,RidersPaid,TripToVendaFee,YouKept'].concat(rows.map(({ b, t }) => [t.date, t.time, t.fromTown, t.toTown, b.type, b.seats, b.pay, b.fare, b.commission, b.driverNet].map(v => `"${String(v).replace(/"/g, '""')}"`).join(','))).join('\n'), 'Earnings statement copied. Paste it into Excel or Google Sheets.'); },
-  logCsv: () => copyText(['Date,Time,Rider,Driver,Plate,From,To,Type,Seats,Fare,BookingFee,Commission,Total,Payment,Status'].concat(logRows().map(({ b, t }) => [t.date, t.time, user(b.riderId).name, user(t.driverId).name, user(t.driverId).vehicle.reg, t.fromTown, t.toTown, b.type, b.seats, b.fare, b.riderFee, b.commission, b.total, b.pay, b.status].map(v => `"${String(v).replace(/"/g, '""')}"`).join(','))).join('\n'), 'Trip log copied as CSV, paste into Excel or Google Sheets')
+  logCsv: () => copyText(['Date,Time,Rider,Driver,Plate,From,To,Type,Seats,Fare,BookingFee,Commission,Total,Payment,Status'].concat(logRows().map(({ b, t }) => [t.date, t.time, user(b.riderId).name, user(t.driverId).name, carOf(t).reg, t.fromTown, t.toTown, b.type, b.seats, b.fare, b.riderFee, b.commission, b.total, b.pay, b.status].map(v => `"${String(v).replace(/"/g, '""')}"`).join(','))).join('\n'), 'Trip log copied as CSV, paste into Excel or Google Sheets')
 });
 
 /* live checks while typing */
@@ -2295,7 +2419,7 @@ if ('serviceWorker' in navigator && location.protocol.startsWith('http')) {
 /* ---------------- Start ---------------- */
 $('#yr').textContent = new Date().getFullYear();
 if (DEMO) { const d = document.createElement('button'); d.id = 'demoBtn'; d.className = 'demo-btn'; d.dataset.act = 'demo'; d.innerHTML = ic('bolt', 'sm') + ' Demo'; document.body.appendChild(d); }
-Object.assign(A, AA_ACTIONS, CAM_ACTIONS, GOOGLE_ACTIONS, CTRL_ACTIONS);
+Object.assign(A, DEL_ACTIONS, CAR2_ACTIONS, AA_ACTIONS, CAM_ACTIONS, GOOGLE_ACTIONS, CTRL_ACTIONS);
 // the loading screen stays until the live data has arrived (at least SPLASH_MS, at most 12 s)
 let appReady; const READY = new Promise(r => appReady = r);
 (window.Cloud?.on ? Cloud.boot() : load()).then(render).catch(e => { console.error(e); try { render(); } catch { } }).finally(() => appReady());

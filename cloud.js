@@ -32,8 +32,8 @@
   const stable = o => JSON.stringify(sortKeys(o));
   const clone = o => JSON.parse(JSON.stringify(o));
   const ACTIVE = ['requested', 'confirmed', 'picked'];
-  const PROFILE_KEYS = ['role', 'name', 'status', 'pro', 'created', 'phoneVerified', 'vehicle', 'bio', 'langs', 'photo', 'since', 'pastTrips', 'proRequested', 'rejectReason'];
-  const ORDER = ['profiles', 'private', 'contacts', 'docs', 'faces', 'trips', 'bookings', 'messages', 'reviews', 'notes', 'requests', 'alerts', 'topups', 'ledger'];
+  const PROFILE_KEYS = ['role', 'name', 'status', 'pro', 'created', 'phoneVerified', 'vehicle', 'vehicle2', 'bio', 'langs', 'photo', 'since', 'pastTrips', 'proRequested', 'rejectReason'];
+  const ORDER = ['profiles', 'private', 'contacts', 'docs', 'cardocs', 'faces', 'trips', 'bookings', 'messages', 'reviews', 'notes', 'requests', 'alerts', 'topups', 'ledger'];
   const COLS = [...ORDER, 'pins', 'openRequests', 'completions'];
   const short = u => { const p = (u?.name || '').trim().split(/\s+/); return p.length > 1 ? `${p[0]} ${p[p.length - 1][0]}.` : (p[0] || 'Member'); };
 
@@ -71,12 +71,13 @@
 
   /* ---------------- cache -> app data ---------------- */
   function userFrom(id) {
-    const p = C.profiles.get(id), pr = C.private.get(id), c = C.contacts.get(id), d = C.docs.get(id), f = C.faces.get(id);
+    const p = C.profiles.get(id), pr = C.private.get(id), c = C.contacts.get(id), d = C.docs.get(id), d2 = C.cardocs.get(id), f = C.faces.get(id);
     if (!p && !pr) return null;
     const u = Object.assign({ id, phone: '' }, clone(pr || {}), clone(p || {}));
     if (c) { u.name = c.name || u.name; u.phone = c.phone || ''; }
     if (u.vehicle) u.vehicle.reg = c?.reg || '';
-    u.docs = Object.assign({}, d ? clone(d) : {}, f?.selfie ? { selfie: f.selfie } : {});
+    if (u.vehicle2) u.vehicle2.reg = c?.reg2 || '';
+    u.docs = Object.assign({}, d ? clone(d) : {}, d2 ? clone(d2) : {}, f?.selfie ? { selfie: f.selfie } : {});
     return u;
   }
   function wallets(users, bookings, trips) {
@@ -127,16 +128,19 @@
       if (u.role === 'admin') return;
       const prof = {}, priv = {};
       Object.keys(u).forEach(k => {
-        if (k[0] === '_' || ['id', 'docs', 'wallet', 'pw', 'phone', 'name', 'vehicle'].includes(k)) return;
+        if (k[0] === '_' || ['id', 'docs', 'wallet', 'pw', 'phone', 'name', 'vehicle', 'vehicle2'].includes(k)) return;
         (PROFILE_KEYS.includes(k) ? prof : priv)[k] = u[k];
       });
       prof.name = short(u); prof.pro = !!u.pro;
       if (u.vehicle) { const { reg, ...v } = u.vehicle; prof.vehicle = v; }
+      if (u.vehicle2) { const { reg, ...v } = u.vehicle2; prof.vehicle2 = v; }
       put('profiles/' + u.id, prof);
+      if (u.status === 'deleted') return; // deleted account: only the anonymous profile stays, for past trip records
       put('private/' + u.id, priv);
-      if (u.phone) put('contacts/' + u.id, Object.assign({ name: u.name, phone: u.phone }, u.vehicle?.reg ? { reg: u.vehicle.reg } : {}));
-      const { selfie, ...docs } = u.docs || {};
+      if (u.phone) put('contacts/' + u.id, Object.assign({ name: u.name, phone: u.phone }, u.vehicle?.reg ? { reg: u.vehicle.reg } : {}, u.vehicle2?.reg ? { reg2: u.vehicle2.reg } : {}));
+      const { selfie, disc2, carPhoto2, ...docs } = u.docs || {};
       put('docs/' + u.id, docs);
+      if ('disc2' in (u.docs || {}) || 'carPhoto2' in (u.docs || {})) out.set('cardocs/' + u.id, stable({ disc2: disc2 || '', carPhoto2: carPhoto2 || '' }));
       if (selfie) put('faces/' + u.id, { selfie });
     });
     db.trips.forEach(t => put('trips/' + t.id, strip(t)));
@@ -253,11 +257,11 @@
     listen('requests', 'requests', S.collection(fs, 'requests'));
     listen('notes', 'notes', q('notes', S.where('to', '==', uid)));
     if (admin) {
-      ['private', 'contacts', 'docs', 'faces', 'bookings', 'messages', 'alerts', 'topups', 'ledger'].forEach(c => listen('a_' + c, c, S.collection(fs, c)));
+      ['private', 'contacts', 'docs', 'cardocs', 'faces', 'bookings', 'messages', 'alerts', 'topups', 'ledger'].forEach(c => listen('a_' + c, c, S.collection(fs, c)));
       listen('notesA', 'notes', q('notes', S.where('to', '==', 'admins')));
       return;
     }
-    ['private', 'contacts', 'docs', 'faces'].forEach(c => listen('me_' + c, c, S.doc(fs, c, uid), true));
+    ['private', 'contacts', 'docs', 'cardocs', 'faces'].forEach(c => listen('me_' + c, c, S.doc(fs, c, uid), true));
     listen('bkR', 'bookings', q('bookings', S.where('riderId', '==', uid)));
     listen('bkD', 'bookings', q('bookings', S.where('driverId', '==', uid)));
     listen('msg', 'messages', q('messages', S.where('participants', 'array-contains', uid)));
@@ -344,6 +348,15 @@
     }
   };
   Cloud.logout = () => S.signOut(auth);
+  /* admin: remove a person's private details and their login (account deletion on request) */
+  Cloud.purge = async id => {
+    for (const c of ['private', 'contacts', 'docs', 'cardocs', 'faces']) { shadow.delete(c + '/' + id); try { await S.deleteDoc(S.doc(fs, c, id)); } catch (e) { console.warn('purge', c, e.code); } }
+    try {
+      const token = await auth.currentUser.getIdToken();
+      const r = await fetch('/api/delete-user', { method: 'POST', headers: { 'content-type': 'application/json', authorization: 'Bearer ' + token }, body: JSON.stringify({ uid: id }) });
+      return r.ok ? 'login-deleted' : 'manual';
+    } catch { return 'manual'; }
+  };
   /* Continue with Google: pop up on phones and computers; full page redirect if the pop up is blocked (e.g. installed app) */
   const google = () => { const p = new S.GoogleAuthProvider(); p.setCustomParameters({ prompt: 'select_account' }); return p; };
   Cloud.google = async () => {
