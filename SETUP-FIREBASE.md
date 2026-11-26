@@ -66,3 +66,26 @@ Only accounts in `admins` can verify people, confirm top ups, switch Pro on, and
 
 ## Free plan limits (Spark)
 50,000 reads and 20,000 writes a day, 1 GB stored. Enough for hundreds of daily users. If you outgrow it, switch to Blaze (pay as you go) and set a budget alert.
+
+## 8. Branded account emails (logo + "Verify my account" button)
+The site sends its own emails through a small Netlify Function (`netlify/functions/auth-email.mjs`) and Brevo (free: 300 emails a day).
+Until the 4 settings below exist, it automatically uses Firebase's plain email instead, so sign up always works.
+
+1. **Own domain (needed for inboxes to trust the email).** Buy one, e.g. `triptovenda.co.za` (about R100/year at a .co.za registrar). Gmail/Outlook senders get rewritten or sent to spam.
+2. **Brevo:** sign up at brevo.com → *Senders, Domains & Dedicated IPs* → **Domains → Add a domain** → add the DNS records it shows at your registrar (DKIM, DMARC, Brevo code) → wait for *Authenticated*. Then **Senders → Add a sender**: `Trip To Venda`, `hello@triptovenda.co.za`.
+3. **Brevo API key:** *SMTP & API → API Keys → Generate a new API key*. Copy it once.
+4. **Firebase key for the function:** Firebase → ⚙ Project settings → **Service accounts** → *Generate new private key* → a .json file downloads. Never upload it to GitHub or send it to anyone.
+5. **Netlify → Site configuration → Environment variables → Add a variable** (scope: Functions), one by one:
+   - `FIREBASE_SERVICE_ACCOUNT` = the whole contents of that .json file
+   - `BREVO_API_KEY` = the Brevo key
+   - `MAIL_FROM` = `hello@triptovenda.co.za`
+   - `SITE_URL` = `https://trip-to-venda.netlify.app`
+6. **Deploys → Trigger deploy → Deploy site.** Sign up with a test email: the branded email arrives.
+
+Protection built in: the verify email only goes to the logged-in person's own address (max 1 a minute, 5 a day); reset emails max 3 an hour per address and 15 an hour per network, with the same answer whether or not the email has an account.
+
+**Do this part now (free, no domain needed):** Firebase → Authentication → **Templates**:
+- Each template → ✏️ → **Sender name** `Trip To Venda`, **Reply to** your email.
+- **Email address verification** subject: `Confirm your email · Trip To Venda`. **Password reset** subject: `Reset your password · Trip To Venda`.
+- At the bottom → **Customize action URL** → `https://trip-to-venda.netlify.app/` → Save.
+  Links in Firebase's emails then open the branded Trip To Venda page with the big **Verify my account** button.
