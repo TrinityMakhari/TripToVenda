@@ -66,6 +66,7 @@ function rng(seed) { let x = seed >>> 0; return () => { x = (x * 1664525 + 10139
 
 /* ---------------- Icons (Lucide style, MIT) ---------------- */
 const ICONS = {
+  question: '<circle cx="12" cy="12" r="10"/><path d="M9.1 9a3 3 0 0 1 5.8 1c0 2-3 3-3 3"/><path d="M12 17h.01"/>',
   home:'<path d="m3 9 9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><path d="M9 22V12h6v10"/>',
   search:'<circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/>',
   car:'<path d="M19 17h2c.6 0 1-.4 1-1v-3c0-.9-.7-1.7-1.5-1.9C18.7 10.6 16 10 16 10s-1.3-1.4-2.2-2.3c-.5-.4-1.1-.7-1.8-.7H5c-.6 0-1.1.4-1.4.9l-1.4 2.9A3.7 3.7 0 0 0 2 12v4c0 .6.4 1 1 1h2"/><circle cx="7" cy="17" r="2"/><path d="M9 17h6"/><circle cx="17" cy="17" r="2"/>',
@@ -2014,9 +2015,9 @@ function render() {
   // phones: tables turn into labelled cards (see .stack-m in styles.css)
   document.querySelectorAll('#app table').forEach(tb => { const rows = [...tb.rows], hr = rows.find(r => r.cells.length && [...r.cells].every(c => c.tagName === 'TH')); if (!hr) return; const h = [...hr.cells].map(x => x.textContent.trim()); tb.classList.add('stack-m'); hr.classList.add('th-row'); rows.forEach(tr => { if (tr !== hr) [...tr.cells].forEach((td, i) => { if (!td.dataset.label && td.colSpan < 2) td.dataset.label = h[i] || ''; }); }); });
 }
-const roleChip = () => { const r = me.role, lbl = r === 'driver' ? 'Driver' : r === 'admin' ? 'Admin' : 'Rider';
-  if (r === 'admin') return `<a href="#/admin" class="role-chip admin" title="You are logged in as Trip To Venda admin"><img src="img/emblem.webp" alt="" class="chip-logo"><span><b>Trip To Venda</b><small>${ic('shield', 'sm')}Admin</small></span></a>`;
-  return `<a href="${r === 'admin' ? '#/admin' : '#/dashboard'}" class="role-chip ${r}" title="You are logged in as a ${lbl.toLowerCase()}">${avatar(me, 'sm')}<span><b>${esc(first(me.name))}</b><small>${ic(r === 'driver' ? 'car' : r === 'admin' ? 'shield' : 'user', 'sm')}${lbl}${r === 'admin' ? '' : ' section'}</small></span></a>`; };
+const roleChip = () => {
+  if (me.role === 'admin') return `<a href="#/admin" class="role-chip admin" title="You are logged in as admin"><img src="img/emblem.webp" alt="" class="chip-logo"><span><b>Admin</b></span></a>`;
+  return `<a href="#/dashboard" class="role-chip ${me.role}" title="${esc(me.name)} · ${me.role === 'driver' ? 'driver' : 'rider'}">${avatar(me, 'sm')}<span><b class="chip-name">${esc(me.name)}</b></span></a>`; };
 function updateNav(cur) {
   const I = { home: ['#/', 'home', 'Home'], search: ['#/search', 'search', 'Trips'], board: ['#/board', 'clock', 'Leaving soon'], parcel: ['#/parcel', 'pkg', 'Parcels'], dashboard: ['#/dashboard', 'ticket', 'My trips'], admin: ['#/admin', 'users', 'Admin'], post: ['#/post', 'plus', 'Post'], how: ['#/how', 'bolt', 'How it works'], safety: ['#/safety', 'shield', 'Safety'], login: ['#/login', 'user', 'Log in'] };
   const role = me?.role || 'visitor';
@@ -2219,7 +2220,9 @@ const A = {
   back: () => back(),
   speed: el => { liveSpeed = +el.dataset.x; document.querySelectorAll('[data-act=speed]').forEach(b => b.classList.toggle('on', b === el)); },
   tab: el => { const p = parse(); go('#/' + p.name + '?tab=' + el.dataset.t); },
-  logout: () => { if (window.Cloud?.on) Cloud.logout(); me = null; store.del('ttv_session'); toast('Logged out'); go('#/'); render(); },
+  logout: () => modal(`<div class="ask-out"><div class="ask-ic">${ic('question', 'lg')}</div><h3>Log out?</h3><p class="muted">Are you sure you want to log out of Trip To Venda?</p>
+    <div class="row"><button class="btn btn-ghost" data-act="close" style="flex:1">No, stay</button><button class="btn" data-act="logoutYes" style="flex:1">Yes, log out</button></div></div>`),
+  logoutYes: () => { const wasAdmin = me?.role === 'admin'; closeModal(); if (window.Cloud?.on) Cloud.logout(); me = null; store.del('ttv_session'); toast('Logged out'); go(wasAdmin ? '#/admin' : '#/'); render(); },
   notes: openNotes,
   install: async () => { if (!deferredInstall) return; deferredInstall.prompt(); await deferredInstall.userChoice; deferredInstall = null; updateNav(parse().name); },
   toBook: () => { const el = $('#bookSide'); if (el) window.scrollTo({ top: el.getBoundingClientRect().top + scrollY - 76, behavior: 'smooth' }); },

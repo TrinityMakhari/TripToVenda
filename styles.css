@@ -789,3 +789,11 @@ body.admin-mode #topbar .nav a{white-space:nowrap}
 @media(min-width:900px){body.admin-mode #app .tabs{display:none}}
 body.admin-door #tabbar,body.admin-door #topActions,body.admin-door #nav,body.admin-door #demoBtn{display:none!important}body.admin-door .admin-login{min-height:calc(100vh - 64px);padding-bottom:40px}
 body.admin-door{background:#0b1a13}
+/* top bar chip: just the name (or "Admin") */
+.role-chip .chip-name{max-width:150px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;display:block}
+@media(max-width:420px){.role-chip .chip-name{max-width:110px}}
+.role-chip.admin b{font-size:15px}
+/* log out question */
+.ask-out{text-align:center;padding:6px 2px 2px}
+.ask-out .ask-ic{width:64px;height:64px;border-radius:50%;margin:0 auto 12px;display:grid;place-items:center;background:#fff4d6;color:#b07800}
+.ask-out h3{margin:0 0 6px;font-size:20px}.ask-out p{margin:0 0 18px}
