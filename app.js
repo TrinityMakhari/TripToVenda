@@ -2015,9 +2015,11 @@ function render() {
   // phones: tables turn into labelled cards (see .stack-m in styles.css)
   document.querySelectorAll('#app table').forEach(tb => { const rows = [...tb.rows], hr = rows.find(r => r.cells.length && [...r.cells].every(c => c.tagName === 'TH')); if (!hr) return; const h = [...hr.cells].map(x => x.textContent.trim()); tb.classList.add('stack-m'); hr.classList.add('th-row'); rows.forEach(tr => { if (tr !== hr) [...tr.cells].forEach((td, i) => { if (!td.dataset.label && td.colSpan < 2) td.dataset.label = h[i] || ''; }); }); });
 }
+// names longer than 15 characters show as first name + surname initials, e.g. "Mulalo Netshiongolwe" -> "Mulalo N."
+const chipName = n => { n = String(n || '').trim().replace(/\s+/g, ' '); if (n.length <= 15) return n; const [f, ...rest] = n.split(' '); return rest.length ? `${f} ${rest.map(w => w[0].toUpperCase() + '.').join(' ')}` : n.slice(0, 14) + '…'; };
 const roleChip = () => {
   if (me.role === 'admin') return `<a href="#/admin" class="role-chip admin" title="You are logged in as admin"><img src="img/emblem.webp" alt="" class="chip-logo"><span><b>Admin</b></span></a>`;
-  return `<a href="#/dashboard" class="role-chip ${me.role}" title="${esc(me.name)} · ${me.role === 'driver' ? 'driver' : 'rider'}">${avatar(me, 'sm')}<span><b class="chip-name">${esc(me.name)}</b></span></a>`; };
+  return `<a href="#/dashboard" class="role-chip ${me.role}" title="${esc(me.name)} · ${me.role === 'driver' ? 'driver' : 'rider'}">${avatar(me, 'sm')}<span><b class="chip-name">${esc(chipName(me.name))}</b></span></a>`; };
 function updateNav(cur) {
   const I = { home: ['#/', 'home', 'Home'], search: ['#/search', 'search', 'Trips'], board: ['#/board', 'clock', 'Leaving soon'], parcel: ['#/parcel', 'pkg', 'Parcels'], dashboard: ['#/dashboard', 'ticket', 'My trips'], admin: ['#/admin', 'users', 'Admin'], post: ['#/post', 'plus', 'Post'], how: ['#/how', 'bolt', 'How it works'], safety: ['#/safety', 'shield', 'Safety'], login: ['#/login', 'user', 'Log in'] };
   const role = me?.role || 'visitor';
