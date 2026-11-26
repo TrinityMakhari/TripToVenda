@@ -1683,7 +1683,7 @@ V.parcel = q => {
     .sort((a, b) => depTime(a) - depTime(b));
   return `<div class="wrap page">
     <div class="parcel-hero"><div><span class="eyebrow" style="color:var(--accent)">${ic('pkg', 'sm')} Parcels</span><h2>Send a parcel home, door to door</h2><p>Groceries for Gogo, school things, clothes, documents. A verified driver who is already making the trip carries it, and the receiver gets a delivery code.</p></div>
-      <ol class="mini-steps"><li><b>Choose a trip</b> that takes parcels</li><li><b>Pin the pickup & drop off</b> and add a photo</li><li><b>Pay safely</b>, held until delivered</li><li><b>Receiver gives the code</b>, then the driver hands over</li></ol></div>
+      <ol class="mini-steps"><li><b>Choose a trip</b> that takes parcels</li><li><b>Pin the pickup & drop off</b> and add a photo</li><li><b>Pay the driver</b> the price shown, at pickup</li><li><b>Receiver gives the code</b>, then the driver hands over</li></ol></div>
     <div class="layout">
       <div class="sticky">${searchForm({ ...q, mode: 'parcel' }, true)}</div>
       <div><div class="page-head" style="margin:0 0 14px"><h3>${has ? `${esc(short(q.ft || q.fp))} → ${esc(short(q.tt || q.tp))}` : 'Drivers taking parcels soon'}</h3><p class="small">${list.length} trip${list.length === 1 ? '' : 's'} accept parcels</p></div>
@@ -1957,7 +1957,7 @@ function render() {
   if (name !== 'board') clearInterval(boardTimer);
   $('#app').innerHTML = ['trip', 'live', 'track'].includes(name) ? fn(args[0], q) : fn(q);
   $('#topbar').classList.toggle('dark', name === 'home' || !V[name]);
-  document.querySelector('.footer').classList.toggle('hidden', name === 'live' || name === 'track');
+  document.querySelector('.footer').classList.toggle('hidden', name !== 'home'); // footer only on the home page
   updateNav(name);
   db.tour = db.tour || {};
   const mark = k => { if (!db.tour[k]) { db.tour[k] = true; save(); } };
@@ -1983,7 +1983,7 @@ function updateNav(cur) {
   $('#topActions').innerHTML = (deferredInstall ? `<button class="btn btn-sm btn-accent" data-act="install">${ic('download', 'sm')} Install app</button>` : '')
     + (me ? `${roleChip()}<button class="icon-btn" data-act="notes" aria-label="Notifications">${ic('bell')}${unread ? `<span class="dot">${unread}</span>` : ''}</button><button class="icon-btn" data-act="logout" aria-label="Log out" title="Log out">${ic('out')}</button>`
       : `<a href="#/login" class="btn btn-sm ${cur === 'home' ? 'btn-glass' : 'btn-ghost'}">Log in</a><a href="#/signup" class="btn btn-sm btn-accent">Sign up</a>`);
-  $('#tabbar').innerHTML = tabs.map(k => `<a href="${I[k][0]}" class="${isCur(k) ? 'active' : ''} ${k === 'post' ? 'fab' : ''} ${k === 'admin' ? 'long' : ''}">${ic(I[k][1])}${k === 'board' ? 'Leaving' : k === 'admin' ? 'Control room' : I[k][2]}</a>`).join('');
+  $('#tabbar').innerHTML = tabs.map(k => `<a href="${I[k][0]}" class="${isCur(k) ? 'active' : ''} ${k === 'post' ? 'fab' : ''} ${k === 'admin' ? 'long' : ''}">${ic(I[k][1])}${k === 'board' ? 'Leaving' : k === 'admin' ? 'Admin' : I[k][2]}</a>`).join('');
   const onTrip = me && db.bookings.some(b => b.status === 'picked' && (b.riderId === me.id || tripById(b.tripId)?.driverId === me.id));
   $('#sosBtn').classList.toggle('hidden', !onTrip || cur === 'live');
 }
