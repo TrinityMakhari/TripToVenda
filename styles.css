@@ -771,3 +771,21 @@ body.cam-open .toast{z-index:2100}
 .note-item img{width:34px;height:34px;border-radius:50%;object-fit:cover;flex:none}
 .note-item>span{flex:1;min-width:0;display:flex;flex-direction:column;gap:2px;overflow-wrap:anywhere}
 .note-item>svg{flex:none;opacity:.45}
+/* ---------- Admin: own login page + admin-only mode ---------- */
+.k5{grid-template-columns:repeat(2,1fr)}
+@media(min-width:760px){.k5{grid-template-columns:repeat(5,1fr)}}
+.kpi.warn{box-shadow:inset 0 0 0 2px var(--accent,#ffb81c)}
+.admin-grid>[hidden]{display:none!important}
+.admin-grid:has(>[hidden]){grid-template-columns:1fr}
+.admin-login{min-height:calc(100vh - 70px);display:flex;flex-direction:column;align-items:center;justify-content:center;padding:40px 16px 90px;background:radial-gradient(900px 600px at 80% 0%,rgba(255,184,28,.14),transparent 60%),radial-gradient(800px 700px at 0% 100%,rgba(15,92,58,.55),transparent 60%),#0b1a13;color:#fff}
+.al-card{width:100%;max-width:420px;background:#fff;color:var(--ink,#1d2433);border-radius:24px;padding:28px 24px;box-shadow:0 30px 80px rgba(0,0,0,.45)}
+.al-brand{display:flex;align-items:center;gap:12px;margin-bottom:22px}
+.al-brand img{width:52px;height:52px;border-radius:50%;object-fit:cover;box-shadow:0 0 0 3px #ffb81c}
+.al-brand b{display:block;font-size:19px}.al-brand b span{color:#0f5c3a}
+.al-brand small{display:inline-flex;align-items:center;gap:4px;margin-top:3px;font-weight:800;font-size:11px;letter-spacing:1.5px;text-transform:uppercase;color:#c62828;background:#fdecec;padding:3px 8px;border-radius:20px}
+.al-card h1{font-size:24px;margin:0 0 6px}.al-card form{margin-top:18px}
+body.admin-mode .tabbar a{font-size:10.5px}
+body.admin-mode #topbar .nav a{white-space:nowrap}
+@media(min-width:900px){body.admin-mode #app .tabs{display:none}}
+body.admin-door #tabbar,body.admin-door #topActions,body.admin-door #nav,body.admin-door #demoBtn{display:none!important}body.admin-door .admin-login{min-height:calc(100vh - 64px);padding-bottom:40px}
+body.admin-door{background:#0b1a13}

@@ -272,6 +272,7 @@ const GOOGLE_ACTIONS = {
       el.querySelector('span').textContent = 'Signing you in…';
       const t0 = Date.now(); while (!me && !Cloud.needsProfile && !Cloud.admin && Date.now() - t0 < 8000) await new Promise(r => setTimeout(r, 150));
       if (Cloud.needsProfile) return go('#/complete');
+      if (me && me.role === 'admin') { wrongDoor(document.querySelector('#loginForm') || { dataset: {} }); el.disabled = false; el.querySelector('span').textContent = txt; return; }
       if (me) { toast('Welcome, ' + first(me.name)); return go(document.querySelector('#loginForm')?.dataset.next || (me.role === 'admin' ? '#/admin' : '#/dashboard')); }
       el.disabled = false; el.querySelector('span').textContent = txt; toast('Signed in, but your account could not load. Try again.', 'err');
     } catch (e) { el.disabled = false; el.querySelector('span').textContent = txt; toast(Cloud.err(e), 'err'); }
@@ -990,6 +991,18 @@ V.login = q => authShell('Welcome back', 'Log in to book, track and manage your 
     <p class="small muted" style="text-align:center;margin-top:8px"><a href="#" data-act="forgot">Forgot your password?</a></p>
   </form>`);
 
+/* Admin login: only at trip-to-venda.netlify.app/admin. Riders and drivers can't log in here, and admins can't use the normal login. */
+V.adminLogin = () => `<div class="admin-login"><div class="al-card">
+  <div class="al-brand"><img src="img/emblem.webp" alt="Trip To Venda"><div><b>Trip To <span>Venda</span></b><small>${ic('shield', 'sm')} Admin</small></div></div>
+  <h1>Admin login</h1><p class="small muted">Restricted area for the Trip To Venda team only.</p>
+  <form id="loginForm" data-admin="1" data-next="#/admin">
+    <div class="field"><label>Admin email</label><input name="login" type="email" required autocomplete="username"></div>
+    <div class="field"><label>Password</label>${pwField('name="password" required autocomplete="current-password"')}</div>
+    <button class="btn btn-block btn-lg">${ic('shield', 'sm')} Log in to Admin</button>
+    <p class="small muted" style="text-align:center;margin-top:12px"><a href="#" data-act="forgot">Forgot your password?</a></p>
+  </form></div>
+  <p class="xs" style="text-align:center;margin-top:18px;opacity:.7">Not an admin? <a href="#/login" style="color:#ffb81c">Rider and driver login</a></p></div>`;
+
 V.verify = () => {
   if (!me) return V.login({ next: '#/verify' });
   const drv = me.role === 'driver', docs = me.docs || {}, v = me.vehicle || {}, locked = me.status === 'verified';
@@ -1498,7 +1511,7 @@ V.admin = q => {
   if (me?.role !== 'admin') return `<div class="wrap page"><div class="banner bad">Admins only.</div></div>`;
   const tab = q.tab || 'overview', S = adminStats(), pending = db.users.filter(u => u.status === 'pending');
   const openSOS = db.alerts.filter(a => !a.resolved), shares = db.bookings.filter(b => b.share?.active);
-  const tabs = tabsHTML(tab, [['overview', 'Overview'], ['trips', 'Trips log'], ['verify', `Verification${pending.length ? ' · ' + pending.length : ''}`], ['users', 'Users'], ['safety', `Safety${openSOS.length ? ' · ' + openSOS.length : ''}`], ['money', 'Money']]);
+  const tabs = tabsHTML(tab, [['overview', 'Overview'], ['live', 'Live now'], ['trips', 'Trips log'], ['verify', `Verification${pending.length ? ' · ' + pending.length : ''}`], ['users', 'Users'], ['safety', `Safety${openSOS.length ? ' · ' + openSOS.length : ''}`]].concat(FEES_ON ? [['money', 'Money']] : []));
   let body = '';
   if (tab === 'overview') {
     const trips = new Set(S.done.map(b => b.tripId)), pax = S.done.reduce((a, b) => a + b.seats, 0), parcels = S.done.filter(b => b.type === 'parcel').length, gmv = S.done.reduce((a, b) => a + b.fare, 0), rev = S.done.reduce((a, b) => a + S.rev(b), 0);
@@ -1511,14 +1524,14 @@ V.admin = q => {
       <div class="kpi"><span class="ic">${ic('users')}</span><b>${pax}</b><span>Passengers carried</span></div>
       <div class="kpi"><span class="ic">${ic('pkg')}</span><b>${parcels}</b><span>Parcels delivered</span></div>
       <div class="kpi"><span class="ic">${ic('wallet')}</span><b>${R(gmv)}</b><span>Fares paid to drivers</span></div>
-      <div class="kpi"><span class="ic" style="background:var(--accent-50);color:#8a5a00">${ic('bolt')}</span><b>${R(rev)}</b><span>Platform revenue</span></div>
+      ${FEES_ON ? `<div class="kpi"><span class="ic" style="background:var(--accent-50);color:#8a5a00">${ic('bolt')}</span><b>${R(rev)}</b><span>Platform revenue</span></div>` : `<div class="kpi"><span class="ic">${ic('clock')}</span><b>${db.trips.filter(t => t.status === 'open' && t.date >= today()).length}</b><span>Upcoming trips</span></div>`}
       <div class="kpi"><span class="ic">${ic('car')}</span><b>${db.users.filter(u => u.role === 'driver' && u.status === 'verified').length}</b><span>Verified drivers</span></div>
       <div class="kpi"><span class="ic">${ic('user')}</span><b>${db.users.filter(u => u.role === 'rider').length}</b><span>Riders</span></div>
       <div class="kpi ${openSOS.length ? 'neg' : ''}"><span class="ic" style="background:var(--danger-50);color:var(--danger)">${ic('alert')}</span><b>${openSOS.length}</b><span>Open SOS alerts</span></div>
     </div>
     <div class="admin-grid">
       <div class="card pad-lg"><div class="card-title">${ic('cal')}<h3>Passengers & parcels delivered per day</h3><span class="xs muted ml-auto">last 30 days</span></div>${barSVG(days, { every: 5 })}</div>
-      <div class="card pad-lg"><div class="card-title">${ic('wallet')}<h3>Platform revenue per week</h3></div><div class="legend"><span><i style="background:#13784b"></i>Booking fees (riders)</span><span><i style="background:#e09a00"></i>Commission (drivers)</span></div>${barSVG(weeks, { series: ['Booking fees', 'Commission'], fmt: v => R(v) })}</div>
+      <div class="card pad-lg" ${FEES_ON ? '' : 'hidden'}><div class="card-title">${ic('wallet')}<h3>Platform revenue per week</h3></div><div class="legend"><span><i style="background:#13784b"></i>Booking fees (riders)</span><span><i style="background:#e09a00"></i>Commission (drivers)</span></div>${barSVG(weeks, { series: ['Booking fees', 'Commission'], fmt: v => R(v) })}</div>
     </div>
     <div class="admin-grid">
       <div class="card pad-lg"><div class="card-title">${ic('route')}<h3>Where people travel</h3><span class="xs muted ml-auto">line thickness = passengers</span></div><div id="volMap" class="map" style="height:340px"></div></div>
@@ -1528,6 +1541,34 @@ V.admin = q => {
       <div class="card"><div class="card-title" style="padding:16px 16px 0">${ic('car')}<h3>Drivers: trips taken</h3></div><div class="table-wrap"><table><tr><th>Driver</th><th>Trips</th><th>Passengers</th><th>Parcels</th><th>Driver earned</th><th>Platform</th></tr>${drivers.map(x => { const d = user(x.id); return `<tr data-act="userSheet" data-id="${x.id}"><td><div class="row">${avatar(d, 'sm')}<span>${esc(d.name)}<br><span class="xs muted">${esc(d.vehicle.reg)}</span></span></div></td><td>${x.trips.size}</td><td>${x.pax}</td><td>${x.parcels}</td><td>${R(x.net)}</td><td>${R(x.fees)}</td></tr>`; }).join('')}</table></div></div>
       <div class="card"><div class="card-title" style="padding:16px 16px 0">${ic('users')}<h3>Who travelled where</h3></div><div class="table-wrap"><table><tr><th>Rider</th><th>Trips</th><th>Last trip</th><th>Goes to most</th><th>Spent</th></tr>${riders.map(x => { const r = user(x.id), lt = tripById(x.last.tripId), top = Object.entries(x.dest).sort((a, b) => b[1] - a[1])[0]; return `<tr data-act="userSheet" data-id="${x.id}"><td><div class="row">${avatar(r, 'sm')}<span>${esc(r.name)}</span></div></td><td>${x.trips}</td><td>${esc(short(lt.fromTown))} → ${esc(short(lt.toTown))}<br><span class="xs muted">${fmtDate(lt.date)}</span></td><td>${esc(top[0])} (${top[1]}×)</td><td>${R(x.spent)}</td></tr>`; }).join('')}</table></div></div>
     </div>`;
+  }
+  if (tab === 'live') {
+    const td = today(), tm = addDays(1), now = Date.now();
+    const onRoad = db.bookings.filter(b => b.status === 'picked');
+    const leaving = db.trips.filter(t => t.status === 'open' && (t.date === td || t.date === tm)).sort((a, b) => (a.date + a.time).localeCompare(b.date + b.time));
+    const bAt = b => b.created || b.at || 0, waiting = db.bookings.filter(b => b.status === 'requested').sort((a, b) => bAt(a) - bAt(b));
+    const looking = (db.requests || []).filter(r => r.date >= td).sort((a, b) => a.date.localeCompare(b.date));
+    const fresh = db.users.filter(u => u.role !== 'admin' && u.status !== 'deleted').sort((a, b) => (b.created || 0) - (a.created || 0)).slice(0, 6);
+    const route = t => t ? `${esc(short(t.fromTown))} → ${esc(short(t.toTown))}` : '—';
+    const box = (icn, title, n, inner, warn) => `<div class="card pad-lg"><div class="card-title" ${warn ? 'style="color:var(--danger)"' : ''}>${ic(icn)}<h3>${title}</h3><span class="badge ml-auto">${n}</span></div>${inner}</div>`;
+    const none = t => `<p class="small muted">${t}</p>`;
+    body = `<div class="kpis k5">
+      <div class="kpi dark"><span class="ic">${ic('car')}</span><b>${onRoad.length}</b><span>Riders on the road now</span></div>
+      <div class="kpi"><span class="ic">${ic('clock')}</span><b>${leaving.filter(t => t.date === td).length}</b><span>Trips leaving today</span></div>
+      <div class="kpi ${waiting.length ? 'warn' : ''}"><span class="ic">${ic('bell')}</span><b>${waiting.length}</b><span>Bookings waiting for a driver</span></div>
+      <div class="kpi"><span class="ic">${ic('users')}</span><b>${looking.length}</b><span>Riders looking for a lift</span></div>
+      <div class="kpi ${openSOS.length ? 'neg' : ''}"><span class="ic" style="background:var(--danger-50);color:var(--danger)">${ic('alert')}</span><b>${openSOS.length}</b><span>Open SOS alerts</span></div>
+    </div>
+    ${openSOS.length ? `<div class="banner bad" style="margin-bottom:16px">${ic('alert')}<span><b>${openSOS.length} open SOS alert${openSOS.length > 1 ? 's' : ''}.</b> <a href="#/admin?tab=safety" class="b">Open Safety now</a></span></div>` : ''}
+    <div class="admin-grid">
+      ${box('nav', 'On the road now', onRoad.length, onRoad.map(b => { const t = tripById(b.tripId), d = tripDriver(t); return `<div class="sum-row" data-act="bk" data-id="${b.id}" style="cursor:pointer"><span><b>${esc(user(b.riderId)?.name || '')}</b> with ${esc(first(d?.name || ''))} · <span class="plate">${esc(carOf(t).reg || '')}</span><br><span class="xs muted">${route(t)} · picked up ${b.pickedAt ? ago(b.pickedAt) : ''}</span></span>${b.share?.active ? `<a href="#/track/${esc(b.share.id || b.id)}" class="btn btn-sm btn-ghost">Track</a>` : ''}</div>`; }).join('') || none('Nobody is travelling right now.'))}
+      ${box('clock', 'Leaving today & tomorrow', leaving.length, leaving.map(t => { const d = tripDriver(t), bk = seatsTaken(t); return `<div class="sum-row"><span><b>${t.date === td ? 'Today' : 'Tomorrow'} ${esc(t.time)}</b> · ${route(t)}<br><span class="xs muted">${esc(d?.name || '')} · ${esc(carOf(t).colour || '')} ${esc(carOf(t).make || '')} <span class="plate">${esc(carOf(t).reg || '')}</span></span></span><b class="small">${bk}/${t.seats} booked</b></div>`; }).join('') || none('No trips leaving today or tomorrow.'))}
+    </div>
+    <div class="admin-grid">
+      ${box('bell', 'Waiting for the driver to accept', waiting.length, waiting.map(b => { const t = tripById(b.tripId), late = bAt(b) && now - bAt(b) > 2 * 3600e3; return `<div class="sum-row" data-act="bk" data-id="${b.id}" style="cursor:pointer"><span><b>${esc(user(b.riderId)?.name || '')}</b> → ${esc(user(t?.driverId)?.name || '')}<br><span class="xs muted">${route(t)} · ${t ? fmtDate(t.date) + ' ' + esc(t.time) : ''}</span></span><span class="badge ${late ? 'b-danger' : 'b-accent'}">${bAt(b) ? ago(bAt(b)) : 'new'}</span></div>`; }).join('') || none('No bookings waiting.'), waiting.some(b => bAt(b) && now - bAt(b) > 2 * 3600e3))}
+      ${box('users', 'Riders looking for a lift', looking.length, looking.map(r => `<div class="sum-row" data-act="userSheet" data-id="${r.riderId}" style="cursor:pointer"><span><b>${esc(user(r.riderId)?.name || 'Rider')}</b><br><span class="xs muted">${esc(short(r.ft))} → ${esc(short(r.tt))} · ${fmtDate(r.date)} · ${r.seats || 1} seat${(r.seats || 1) > 1 ? 's' : ''}</span></span>${ic('right', 'sm')}</div>`).join('') || none('No open lift requests.'))}
+    </div>
+    ${box('user', 'Newest sign-ups', fresh.length, fresh.map(u => `<div class="sum-row" data-act="userSheet" data-id="${u.id}" style="cursor:pointer"><span>${esc(u.name)} <span class="xs muted">· ${u.role}${u.created ? ' · ' + ago(u.created) : ''}</span></span><span class="badge ${u.status === 'verified' ? '' : 'b-accent'}">${u.status === 'verified' ? 'Verified' : u.status === 'pending' ? 'Waiting review' : 'Not submitted'}</span></div>`).join('') || none('No sign-ups yet.'))}`;
   }
   if (tab === 'trips') {
     const [n, rows] = logBody(), sel = (k, opts) => `<select data-lf="${k}">${opts.map(([v, l]) => `<option value="${v}" ${logF[k] === v ? 'selected' : ''}>${l}</option>`).join('')}</select>`;
@@ -1951,14 +1992,19 @@ function render() {
   const act = actionParams();
   let { name, args, q } = act ? { name: 'authAction', args: [], q: {} } : parse();
   if (window.Cloud?.needsProfile && !['complete', 'rules', 'authAction', 'track'].includes(name)) { name = 'complete'; args = []; }
+  // admins only ever see the admin dashboard (plus the family tracking page they open from Safety)
+  if (me?.role === 'admin' && !['admin', 'track', 'authAction'].includes(name)) { name = 'admin'; args = []; q = {}; history.replaceState(null, '', location.pathname + '#/admin'); }
+  if (name === 'admin' && !me) name = 'adminLogin';
+  if (name === 'admin' && me && me.role !== 'admin') { name = 'home'; history.replaceState(null, '', location.pathname + '#/'); }
   const pr = name + '/' + args.join('/'); if (pr !== photoRoute) { Object.keys(PHOTOS).forEach(k => delete PHOTOS[k]); photoRoute = pr; if (document.body.classList.contains('cam-open')) camClose(); }
   clearMaps(); afterRender = [];
   const fn = V[name] || V.home;
   if (name !== 'board') clearInterval(boardTimer);
   $('#app').innerHTML = ['trip', 'live', 'track'].includes(name) ? fn(args[0], q) : fn(q);
-  $('#topbar').classList.toggle('dark', name === 'home' || !V[name]);
+  $('#topbar').classList.toggle('dark', name === 'home' || name === 'adminLogin' || !V[name]);
   document.querySelector('.footer').classList.toggle('hidden', name !== 'home'); // footer only on the home page
   updateNav(name);
+  document.body.classList.toggle('admin-door', name === 'adminLogin'); // admin login page shows no rider/driver menus
   db.tour = db.tour || {};
   const mark = k => { if (!db.tour[k]) { db.tour[k] = true; save(); } };
   if (name === 'home') mark('visit'); if (name === 'board') mark('board'); if (me?.role === 'admin' && ['admin', 'dashboard'].includes(name) && (!q.tab || q.tab === 'overview')) mark('admin');
@@ -1974,6 +2020,17 @@ const roleChip = () => { const r = me.role, lbl = r === 'driver' ? 'Driver' : r 
 function updateNav(cur) {
   const I = { home: ['#/', 'home', 'Home'], search: ['#/search', 'search', 'Trips'], board: ['#/board', 'clock', 'Leaving soon'], parcel: ['#/parcel', 'pkg', 'Parcels'], dashboard: ['#/dashboard', 'ticket', 'My trips'], admin: ['#/admin', 'users', 'Admin'], post: ['#/post', 'plus', 'Post'], how: ['#/how', 'bolt', 'How it works'], safety: ['#/safety', 'shield', 'Safety'], login: ['#/login', 'user', 'Log in'] };
   const role = me?.role || 'visitor';
+  document.body.classList.toggle('admin-mode', role === 'admin');
+  if (role === 'admin') {
+    const at = parse().q.tab || 'overview', AT = [['overview', 'grid', 'Overview'], ['live', 'bolt', 'Live now'], ['verify', 'shield', 'Verify'], ['users', 'users', 'Users'], ['trips', 'route', 'Trips log'], ['safety', 'alert', 'Safety']];
+    const unread = db.notes.filter(n => myNote(n) && !n.read).length;
+    $('#topbar').classList.add('signed');
+    $('#nav').innerHTML = AT.map(([k, , l]) => `<a href="#/admin?tab=${k}" class="${at === k ? 'active' : ''}">${l}</a>`).join('');
+    $('#topActions').innerHTML = `${roleChip()}<button class="icon-btn" data-act="notes" aria-label="Notifications">${ic('bell')}${unread ? `<span class="dot">${unread}</span>` : ''}</button><button class="icon-btn" data-act="logout" aria-label="Log out" title="Log out">${ic('out')}</button>`;
+    $('#tabbar').innerHTML = AT.filter(([k]) => k !== 'trips').map(([k, i, l]) => `<a href="#/admin?tab=${k}" class="${at === k ? 'active' : ''}">${ic(i)}${l}</a>`).join('');
+    $('#sosBtn').classList.add('hidden');
+    return;
+  }
   const desk = { visitor: ['home', 'search', 'board', 'parcel', 'how', 'safety'], rider: ['home', 'search', 'board', 'parcel', 'dashboard', 'how', 'safety'], driver: ['home', 'board', 'search', 'dashboard', 'post', 'safety'], admin: ['home', 'admin', 'board', 'search', 'safety'] }[role];
   const tabs = { visitor: ['home', 'search', 'board', 'parcel', 'login'], rider: ['home', 'search', 'board', 'parcel', 'dashboard'], driver: ['home', 'board', 'post', 'dashboard', 'safety'], admin: ['home', 'admin', 'board', 'search', 'safety'] }[role];
   const isCur = k => cur === k || (k === 'admin' && cur === 'dashboard' && role === 'admin') || (k === 'dashboard' && cur === 'dashboard' && role !== 'admin');
@@ -2046,6 +2103,13 @@ F.signupForm = async f => {
   notify(u.id, `Welcome to Trip To Venda, ${first(u.name)}! Verify your account to get started.`, '#/verify');
   save(); toast('Account created 🎉'); go('#/verify');
 };
+// admins use /admin, everyone else uses the normal login
+function wrongDoor(f) {
+  const adminDoor = f?.dataset.admin === '1';
+  if (adminDoor === (me?.role === 'admin')) return false;
+  const msg = adminDoor ? 'This login is for Trip To Venda admins only. Use the normal Log in.' : 'Admins log in at trip-to-venda.netlify.app/admin';
+  if (window.Cloud?.on) Cloud.logout(); me = null; store.del('ttv_session'); toast(msg, 'err'); render(); return true;
+}
 F.loginForm = async f => {
   if (window.Cloud?.on) {
     const btn = f.querySelector('button:not([type=button])'); if (btn) btn.disabled = true;
@@ -2053,14 +2117,16 @@ F.loginForm = async f => {
     catch (e) { if (btn) btn.disabled = false; f.password.value = ''; return toast(Cloud.err(e), 'err'); }
     await Cloud.whenMe();
     if (!me) { if (btn) btn.disabled = false; return toast('Signed in, but no profile was found. Contact Trip To Venda.', 'err'); }
-    toast('Welcome back, ' + first(me.name)); return go(f.dataset.next || '#/dashboard');
+    if (wrongDoor(f)) { if (btn) btn.disabled = false; return; }
+    toast('Welcome back, ' + first(me.name)); return go(me.role === 'admin' ? '#/admin' : (f.dataset.next || '#/dashboard'));
   }
   const id = f.login.value.trim().toLowerCase().replace(/\s/g, ''), pw = await hash(f.password.value);
   const u = db.users.find(x => (x.email === id || x.phone === id) && x.pw === pw);
   if (!u) return toast('Wrong email/cellphone or password', 'err');
-  me = u; store.set('ttv_session', u.id); toast('Welcome back, ' + first(u.name));
-  const next = f.dataset.next || '#/dashboard';
-  go(next);
+  me = u; store.set('ttv_session', u.id);
+  if (wrongDoor(f)) return;
+  toast('Welcome back, ' + first(u.name));
+  go(me.role === 'admin' ? '#/admin' : (f.dataset.next || '#/dashboard'));
 };
 F.postForm = f => {
   const fp = f.fromProv.value, tp = f.toProv.value;
@@ -2413,7 +2479,7 @@ if ('serviceWorker' in navigator && location.protocol.startsWith('http')) {
 (function startOnHome() {
   let started = false; try { started = sessionStorage.getItem('ttv_started') === '1'; sessionStorage.setItem('ttv_started', '1'); } catch { }
   if (started || new URLSearchParams(location.search).get('oobCode')) return;
-  if (!/^#\/(track|trip|rules)(\/|\?|$)/.test(location.hash)) history.replaceState(null, '', location.pathname + location.search + '#/');
+  if (!/^#\/(track|trip|rules|admin)(\/|\?|$)/.test(location.hash)) history.replaceState(null, '', location.pathname + location.search + '#/');
 })();
 
 /* ---------------- Start ---------------- */
