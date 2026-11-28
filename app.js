@@ -2040,7 +2040,7 @@ function updateNav(cur) {
   const unread = me ? db.notes.filter(n => myNote(n) && !n.read).length : 0;
   $('#topbar').classList.toggle('signed', !!me);
   $('#nav').innerHTML = desk.map(k => `<a href="${I[k][0]}" class="${isCur(k) ? 'active' : ''}">${I[k][2]}</a>`).join('');
-  $('#topActions').innerHTML = (deferredInstall ? `<button class="btn btn-sm btn-accent" data-act="install">${ic('download', 'sm')} Install app</button>` : '')
+  $('#topActions').innerHTML = ''
     + (me ? `${roleChip()}<button class="icon-btn" data-act="notes" aria-label="Notifications">${ic('bell')}${unread ? `<span class="dot">${unread}</span>` : ''}</button><button class="icon-btn" data-act="logout" aria-label="Log out" title="Log out">${ic('out')}</button>`
       : `<a href="#/login" class="btn btn-sm ${cur === 'home' ? 'btn-glass' : 'btn-ghost'}">Log in</a><a href="#/signup" class="btn btn-sm btn-accent">Sign up</a>`);
   $('#tabbar').innerHTML = tabs.map(k => `<a href="${I[k][0]}" class="${isCur(k) ? 'active' : ''} ${k === 'post' ? 'fab' : ''} ${k === 'admin' ? 'long' : ''}">${ic(I[k][1])}${k === 'board' ? 'Leaving' : k === 'admin' ? 'Admin' : I[k][2]}</a>`).join('');
@@ -2201,10 +2201,14 @@ function openRate(id) {
       <button class="btn btn-block btn-lg">Submit rating</button></form>`);
 }
 const noteLink = n => { const l = String(n.link || ''); if (!/^#\//.test(l)) return me?.role === 'admin' ? '#/admin' : '#/dashboard'; return me?.role === 'admin' && l === '#/dashboard' ? '#/admin' : l; };
+// who a notification comes from: the person's profile photo (or initials); Trip To Venda logo for admin and system messages
+const noteFrom = n => { const u = n.from && n.from !== me?.id ? user(n.from) : null; return u && u.role !== 'admin' && u.status !== 'deleted' ? u : null; };
+const noteFace = n => { const u = noteFrom(n); return u ? `<span class="note-face">${avatar(u, 'sm')}</span>` : '<img src="img/emblem.webp" alt="Trip To Venda">'; };
+const noteWho = n => { const u = noteFrom(n); return `<b class="note-who">${u ? esc(chipName(u.name)) + ` <span class="xs muted">· ${u.role === 'driver' ? 'Driver' : 'Rider'}</span>` : 'Trip To Venda'}</b>`; };
 function openNotes() {
   const notes = db.notes.filter(myNote).slice(-15).reverse();
   modal(`<div class="notes-head"><img src="img/emblem.webp" alt="Trip To Venda"><div><b>Trip To Venda</b><span class="xs muted">Notifications</span></div><button class="icon-btn" data-act="close" aria-label="Close">${ic('close')}</button></div>
-    <div class="notes-list">${notes.map(n => `<a href="${esc(noteLink(n))}" class="note-item ${n.read ? '' : 'new'}" data-act="go"><img src="img/emblem.webp" alt=""><span><span class="small">${esc(n.text)}</span><span class="xs muted">${ago(n.at)}</span></span>${ic('right', 'sm')}</a>`).join('') || `<div class="empty"><div class="ic">${ic('bell', 'lg')}</div><p>You're all caught up.</p></div>`}</div>`);
+    <div class="notes-list">${notes.map(n => `<a href="${esc(noteLink(n))}" class="note-item ${n.read ? '' : 'new'}" data-act="go">${noteFace(n)}<span>${noteWho(n)}<span class="small">${esc(n.text)}</span><span class="xs muted">${ago(n.at)}</span></span>${ic('right', 'sm')}</a>`).join('') || `<div class="empty"><div class="ic">${ic('bell', 'lg')}</div><p>You're all caught up.</p></div>`}</div>`);
   notes.forEach(n => n.read = true); save(); updateNav(parse().name);
 }
 async function copyText(t, msg) { try { await navigator.clipboard.writeText(t); toast(msg); } catch { toast('Copy not allowed here, select and copy the text', 'err'); } }
@@ -2226,7 +2230,14 @@ const A = {
     <div class="row"><button class="btn btn-ghost" data-act="close" style="flex:1">No, stay</button><button class="btn" data-act="logoutYes" style="flex:1">Yes, log out</button></div></div>`),
   logoutYes: () => { const wasAdmin = me?.role === 'admin'; closeModal(); if (window.Cloud?.on) Cloud.logout(); me = null; store.del('ttv_session'); toast('Logged out'); go(wasAdmin ? '#/admin' : '#/'); render(); },
   notes: openNotes,
-  install: async () => { if (!deferredInstall) return; deferredInstall.prompt(); await deferredInstall.userChoice; deferredInstall = null; updateNav(parse().name); },
+  install: async () => {
+    if (deferredInstall) { deferredInstall.prompt(); const c = await deferredInstall.userChoice; deferredInstall = null; if (c?.outcome === 'accepted') hideAppPop(); return; }
+    hideAppPop();
+    modal(`<div class="ask-out"><div class="ask-ic" style="background:#e8f3ee;color:#0f5c3a">${ic('download', 'lg')}</div><h3>Add Trip To Venda to your phone</h3>
+      ${/iphone|ipad|ipod/i.test(navigator.userAgent) ? `<p class="muted" style="text-align:left">1. Tap the <b>Share</b> button at the bottom of Safari.<br>2. Scroll and tap <b>Add to Home Screen</b>.<br>3. Tap <b>Add</b>.</p>` : `<p class="muted" style="text-align:left">1. Tap the <b>⋮ menu</b> at the top right of Chrome.<br>2. Tap <b>Install app</b> or <b>Add to Home screen</b>.<br>3. Tap <b>Install</b>.</p>`}
+      <button class="btn btn-block" data-act="close">Got it</button></div>`);
+  },
+  appPopClose: () => hideAppPop(),
   toBook: () => { const el = $('#bookSide'); if (el) window.scrollTo({ top: el.getBoundingClientRect().top + scrollY - 76, behavior: 'smooth' }); },
   forgot: () => modal(`${sheetHead('Reset your password', window.Cloud?.on ? "We'll email you a secure reset link" : "We'll send a reset link to your cellphone")}<form id="forgotForm"><div class="field"><label>${window.Cloud?.on ? 'Email' : 'Cellphone or email'}</label><input name="login" ${window.Cloud?.on ? 'type="email"' : ''} required></div><button class="btn btn-block btn-lg">Send reset link</button></form>`),
   demoLogin: el => { const f = $('#loginForm'); f.login.value = el.dataset.u; f.password.value = el.dataset.p; f.requestSubmit(); },
@@ -2456,7 +2467,30 @@ document.addEventListener('mousemove', e => { const t = e.target.closest?.('[dat
 
 /* ---------------- Install as app (PWA) ---------------- */
 let deferredInstall = null;
-window.addEventListener('beforeinstallprompt', e => { e.preventDefault(); deferredInstall = e; updateNav(parse().name); });
+window.addEventListener('beforeinstallprompt', e => { e.preventDefault(); deferredInstall = e; });
+/* "Download the app" pop-up: shows every time the website is opened (not inside the installed app).
+   It hides after the person scrolls 3 times, taps ✕, or installs. */
+const isInstalled = () => window.matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
+function hideAppPop() { const p = $('#appPop'); if (!p) return; p.classList.remove('show'); setTimeout(() => p.remove(), 400); window.removeEventListener('scroll', appPopScroll); }
+let appPopScrolls = 0, appPopTimer = null, appPopLastY = 0;
+function appPopScroll() {
+  clearTimeout(appPopTimer);
+  appPopTimer = setTimeout(() => { // one scroll = one swipe that moved the page, counted when it stops
+    if (Math.abs(scrollY - appPopLastY) < 40) return;
+    appPopLastY = scrollY;
+    if (++appPopScrolls >= 3) hideAppPop();
+  }, 180);
+}
+function showAppPop() {
+  if (isInstalled() || $('#appPop')) return;
+  const p = document.createElement('div'); p.id = 'appPop'; p.className = 'app-pop'; p.setAttribute('role', 'dialog'); p.setAttribute('aria-label', 'Download the app');
+  p.innerHTML = `<img src="img/emblem.webp" alt=""><div class="ap-txt"><b>Download the app</b><span>Trip To Venda on your phone: faster booking and trip alerts.</span></div><button class="btn btn-sm btn-accent" data-act="install">${ic('download', 'sm')} Get it</button><button class="ap-x" data-act="appPopClose" aria-label="Close">${ic('close', 'sm')}</button>`;
+  document.body.appendChild(p);
+  requestAnimationFrame(() => requestAnimationFrame(() => p.classList.add('show')));
+  appPopScrolls = 0; appPopLastY = scrollY;
+  window.addEventListener('scroll', appPopScroll, { passive: true });
+}
+window.addEventListener('appinstalled', hideAppPop);
 /* ---------------- Always the newest version ---------------- */
 // The service worker checks for a new version on every start, when the app comes back to the screen, and every 30 min.
 // When a new version takes over: reload at once if the person is not busy, otherwise offer a "Refresh" bar.
@@ -2493,6 +2527,7 @@ if (DEMO) { const d = document.createElement('button'); d.id = 'demoBtn'; d.clas
 Object.assign(A, DEL_ACTIONS, CAR2_ACTIONS, AA_ACTIONS, CAM_ACTIONS, GOOGLE_ACTIONS, CTRL_ACTIONS);
 // the loading screen stays until the live data has arrived (at least SPLASH_MS, at most 12 s)
 let appReady; const READY = new Promise(r => appReady = r);
+READY.then(() => setTimeout(showAppPop, 900)); // after the splash screen
 (window.Cloud?.on ? Cloud.boot() : load()).then(render).catch(e => { console.error(e); try { render(); } catch { } }).finally(() => appReady());
 
 /* ---------------- Branded loading screen (SPLASH_MS) ---------------- */
